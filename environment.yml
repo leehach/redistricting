@@ -1,0 +1,9 @@
+name: redistricting
+channels:
+  - conda-forge
+dependencies:
+  - python
+  # required
+  # optional, testing, etc.
+  # docs
+
