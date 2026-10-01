@@ -3,6 +3,7 @@ channels:
   - conda-forge
 dependencies:
   - python
+  - pyomo
   # required
   # optional, testing, etc.
   # docs
