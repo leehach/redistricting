@@ -76,7 +76,7 @@ def make_dict(df):
 # then `MM`` unused variable that sets the definitive shape above - we could use it and loop in the function or we'll see
 # iHat is the row number
 
-def calcEfficiency(good_plans_dict, bad_plans_dict, good_plan_num_rows, good_plan_num_cols, bad_plan_number_rows, bad_plan_number_cols, current_row):
+def calculate_efficiency(good_plans_dict, bad_plans_dict, good_plan_num_rows, good_plan_num_cols, bad_plan_number_rows, bad_plan_number_cols, current_row):
 
    # Instantiate an empty pyomo model
    DEA_model = AbstractModel()
@@ -224,7 +224,7 @@ if __name__ == "__main__":
 
    for row_num in range(1, num_rows + 1):
       # score it (tuple without parens again)
-      (efficiency, result_code) = calcEfficiency(
+      (efficiency, result_code) = calculate_efficiency(
          good_plan_dict,
          bad_plan_dict,
          num_good_plan_rows,
