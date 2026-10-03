@@ -40,22 +40,23 @@ import os
 
 # note no headers, so this is going off memory/investigation
 # Idea: we can keep a dict of measures who are good and bad and dynamically lookup to avoid this.
-df_g = pd.read_csv("plans1_g.csv",header=None) # metrics/critera for which "good is better" -> higher is better (i.e. compactness)
-df_b = pd.read_csv("plans2_b.csv",header=None) # metrics/critera for whiich "bad is better" -> lower is better (i.e county splits)
+good_plans = pd.read_csv("data/Plans1_g.csv", header=None) # metrics/critera for which "good is better" -> higher is better (i.e. compactness)
+bad_plans = pd.read_csv("data/Plans2_b.csv", header=None) # metrics/critera for whiich "bad is better" -> lower is better (i.e county splits)
 
-# create dataframe to hold data
-df_eff = pd.DataFrame(columns=["Plan_Number_ID","DEA_Eff"])
+# one dict per scored plan; becomes a DataFrame after the loop
+results = []
 
 # formats each table into a 1-indexed dict - needed for pyomo
 # What is pyomo? It's OSS Optimization Modeling, it models problems to be sent to an external solver.
 
-def makeDict(aDF):
-    (M,N) = aDF.shape
+# note: leaving this as "make dict" - might refactor we'll see
+def make_dict(df):
+    (M,N) = df.shape
     print(M,N)
     a = {}
     for row in range(M):
         for col in range(N):
-            a[(row+1,col+1)] = aDF.iloc[row,col] # iloc = integer location (pandas) / # plus 1 because the model below starts at one (RangeSet)
+            a[(row+1,col+1)] = df.iloc[row,col] # iloc = integer location (pandas) / # plus 1 because the model below starts at one (RangeSet)
             
     return (M, N, a)
 
@@ -77,17 +78,17 @@ def makeDict(aDF):
 
 # M is rows and N is coluimns
     
-
-(MM_g, NN_g, a_g) = makeDict(df_g)
-(MM_b, NN_b, a_b) = makeDict(df_b)
+# (MM_g, NN_g, a_g) = make_dict(good_plans)
+# (MM_b, NN_b, a_b) = make_dict(bad_plans)
+(num_good_plan_rows, num_good_plan_cols, good_plan_dict) = make_dict(good_plans)
+(num_bad_plan_rows, num_bad_plan_cols, bad_plan_dict) = make_dict(bad_plans)
 
 # compare rows - ensure they're the same size...
 # this also doesn't throw... which... probably is a good idea?
-if MM_g != MM_b:
+if num_good_plan_rows != num_bad_plan_rows:
 	print("Incompatible numbers of rows in good and bad plan files...\n");
-	
 else:
-	MM = MM_g
+	num_rows = num_good_plan_rows
 
 
 # this scores one **plan** at a time, so that's row by row
@@ -97,36 +98,36 @@ else:
 # then `MM`` unused variable that sets the definitive shape above - we could use it and loop in the function or we'll see
 # iHat is the row number
 
-def calcEfficiency(a_g,a_b, MM_g,NN_g,MM_b, NN_b,MM, iHat):
+def calcEfficiency(good_plans_dict, bad_plans_dict, good_plan_num_rows, good_plan_num_cols, bad_plan_number_rows, bad_plan_number_cols, current_row):
 
    # Instantiate an empty pyomo model
-   DEAmod = AbstractModel()
+   DEA_model = AbstractModel()
    
    # total number of metrics (these are columns)
-   S = NN_g + NN_b
+   total_metrics = good_plan_num_cols + bad_plan_number_cols
 
    # set good and bad metrics to properties on the model
    # interesting is that the attribute namne here doesn't matter - N_g for instance.
    # Pyomo will go by the types - the RangeSet or Set or Var
    # so this is all setup
-   DEAmod.N_g = RangeSet(1,NN_g) # range of columns in good
-   DEAmod.N_b = RangeSet(1,NN_b) # range of columns in bad
-   DEAmod.N = Set(initialize = DEAmod.N_g | DEAmod.N_b) # Set of the union of column indicies -> so {1,2,3} - is dead code - unused
+   DEA_model.good_cols = RangeSet(1, good_plan_num_cols) # range of columns in good
+   DEA_model.bad_cols = RangeSet(1, bad_plan_number_cols) # range of columns in bad
+   DEA_model.num_cols = Set(initialize = DEA_model.good_cols | DEA_model.bad_cols) # Set of the union of column indicies -> so {1,2,3} - is dead code - unused
 
    # we do the same as above for the rows - set up RangeSets and a Set with the union of all row indicies
-   DEAmod.M_g = RangeSet(1,MM_g)
-   DEAmod.M_b = RangeSet(1,MM_b)
-   DEAmod.M = Set(initialize = DEAmod.M_g | DEAmod.M_b)
+   DEA_model.good_rows = RangeSet(1, good_plan_num_rows)
+   DEA_model.bad_rows = RangeSet(1, bad_plan_number_rows)
+   DEA_model.num_rows = Set(initialize = DEA_model.good_rows | DEA_model.bad_rows)
 
    # variables in pyomo are things are numbers that the solve will fill in - what it picks.
    # It'll take later constraints and our objective, and find the "best" value
 
    # Two types: indexed (thats the first two, creates as many as there are in the collection)
    # Singe: empty parameter - just creates one.
-   DEAmod.g = Var(DEAmod.N_g) # one for each good metric/col - a weight per metric
-   DEAmod.b = Var(DEAmod.N_b) # one for each bad metric/col - a weight per metric
-   DEAmod.v = Var() # a "baseline" - will define later.
-   DEAmod.eps = Var() # efficiency score
+   DEA_model.good_weights = Var(DEA_model.good_cols) # one for each good metric/col - a weight per metric
+   DEA_model.bad_weights = Var(DEA_model.bad_cols) # one for each bad metric/col - a weight per metric
+   DEA_model.baseline = Var() # a "baseline" - will define later.
+   DEA_model.efficiency_score = Var() # efficiency score
 
    # Define "rules"
    # First, one for the objective.
@@ -134,56 +135,66 @@ def calcEfficiency(a_g,a_b, MM_g,NN_g,MM_b, NN_b,MM, iHat):
    # and the Objective set below, is saying - hey maximize this
 
    # Always return an expression - anything that can be evaluated to produce a value
-   def obj_rule (DEAmod):
-      return DEAmod.eps
+   def obj_rule (model):
+      return model.efficiency_score
 
-   DEAmod.obj = Objective(rule = obj_rule, sense = maximize)
+   DEA_model.obj = Objective(rule = obj_rule, sense = maximize)
 
    ### ignoring for now ###
-   #def obj_rule (DEAmod):
-    #  return sum(a_g[iHat,i]*DEAmod.g[i] for i in DEAmod.N_g)- sum(a_b[iHat,j]*DEAmod.b[j] for j in DEAmod.N_b) - DEAmod.v
-   #DEAmod.obj = Objective(rule = obj_rule, sense = maximize)
+   #def obj_rule (DEA_model):
+    #  return sum(a_g[iHat,i]*DEA_model.g[i] for i in DEA_model.N_g)- sum(a_b[iHat,j]*DEA_model.b[j] for j in DEA_model.N_b) - DEA_model.v
+   #DEA_model.obj = Objective(rule = obj_rule, sense = maximize)
    
    # This time we're pairing a rule with a Constraint rather than an Objective
    # This calculates, for each row, the sum of each metric times its weight
    # We don't know the weight! That's for the solver to figure out - we added it as a variable, remember.
    # Also, the baseline... just keep in mind we want this to be as low as possible to get the higest possible EPS
-   def con_eps_rule(DEAmod):
-	   return DEAmod.eps + DEAmod.v - sum(a_g[iHat,i]*DEAmod.g[i] for i in DEAmod.N_g)+ sum(a_b[iHat,j]*DEAmod.b[j] for j in DEAmod.N_b)  == 1.0
+   def efficiency_constraint_rule(DEA_model):
+	   return DEA_model.efficiency_score + DEA_model.baseline - sum(
+               good_plans_dict[current_row, i] * DEA_model.good_weights[i] for i in DEA_model.good_cols
+            ) + sum(
+               bad_plans_dict[current_row, j] * DEA_model.bad_weights[j] for j in DEA_model.bad_cols
+            ) == 1.0
    
-   DEAmod.con_eps = Constraint(rule = con_eps_rule)
+   DEA_model.efficency_constraint = Constraint(rule = efficiency_constraint_rule)
 
    # this is the core constraint, hence principal.
    # It takes one constraint per plan, because we set it up that way about with the indexed variable
    # So this is an "Indexed constraint" enforcing the good score of a plan minus the bad score of a plan is <= v - the baseline.
    # Now, the solver picks the baseline balancing the rules we're attaching.
    # i "walks across" the columns of a given plan's row and sums em, same for the bad and subtracts
-   def con_principal_rule (DEAmod, m):
-      return sum(a_g[m,i]*DEAmod.g[i] for i in DEAmod.N_g) - DEAmod.v - sum(a_b[m,j]*DEAmod.b[j] for j in DEAmod.N_b) <= 0.0
-   DEAmod.con_principal = Constraint(DEAmod.M, rule=con_principal_rule)
+   def principal_constraint_rule(model, rows):
+      return sum(
+            good_plans_dict[rows, i] * model.good_weights[i] for i in model.good_cols
+      ) - model.baseline - sum(
+            bad_plans_dict[rows, j] * model.bad_weights[j] for j in model.bad_cols
+      ) <= 0.0
+   
+   DEA_model.principal_constraint = Constraint(DEA_model.num_rows, rule=principal_constraint_rule)
 
    # now constaint that is just an expr - you can pass a short form.
    # we could have done it above
    # this is stating that the bar/baseline v cannot go below 1
-   DEAmod.con_v = Constraint(expr = DEAmod.v >= 1.0)
+
+   DEA_model.baseline_constraint = Constraint(expr = DEA_model.baseline >= 1.0)
 
    # These next rules ensure that we don't assign a weight of 0 to any given metrics,
    # and thus ignore a metric completely.
    # It assigns a floor, dynamically, depending on the eps it is also solving for and the row-metric value.
    # The floor is the minimum share. And for a given eps. We do it once for the bad and once for the good.
 
-   def con_u_g_rule(DEAmod, ng):
-	   return (S*a_g[iHat,ng])*DEAmod.g[ng] - DEAmod.eps >= 0.0 
+   def good_floor_constraint_rule(model, num_good): # not sure what ng is here
+	   return (total_metrics * good_plans_dict[current_row, num_good]) * model.good_weights[num_good] - model.efficiency_score >= 0.0
    
-   DEAmod.con_u_g = Constraint(DEAmod.N_g, rule = con_u_g_rule)
+   DEA_model.good_floor_constraint = Constraint(DEA_model.good_cols, rule = good_floor_constraint_rule)
 	
-   def con_u_b_rule(DEAmod, nb):
-      return (S*a_b[iHat,nb])*DEAmod.b[nb] - DEAmod.eps >= 0.0 
+   def bad_floor_constraint_rule(model, num_bad):
+      return (total_metrics * bad_plans_dict[current_row, num_bad]) * model.bad_weights[num_bad] - model.efficiency_score >= 0.0
    
-   DEAmod.con_u_b = Constraint(DEAmod.N_b, rule = con_u_b_rule) 
+   DEA_model.bad_floor_constraint = Constraint(DEA_model.bad_cols, rule = bad_floor_constraint_rule) 
    
    # Create the concrete model and solve
-   DEAinstance = DEAmod.create_instance() # builds the model
+   model = DEA_model.create_instance() # builds the model
 
    # assign a solve that actually does the math
    # solver set to gurobi for 9 metrics, glpk for 3 and 6 metrics? Check this..Yes Gurobi licence expired
@@ -191,41 +202,48 @@ def calcEfficiency(a_g,a_b, MM_g,NN_g,MM_b, NN_b,MM, iHat):
    #Opt = SolverFactory("gurobi")
 
    # sovle and get a report back
-   Soln = Opt.solve(DEAinstance)
+   Soln = Opt.solve(model)
 
    # this line is redundant, solve() above already loads
-   DEAinstance.solutions.load_from(Soln)
+   model.solutions.load_from(Soln)
 
    # return the a success tupe (score,0) or failure tupel (0,1)
    # however, this is broken ebcause we're saying if "optimal == optimal"
    if str(TerminationCondition.optimal) == "optimal":
-      return value(DEAinstance.obj),0
+      return (value(model.obj), 0)
    else:
-      return 0,1
+      return (0,1)
 
 
 # and now the execution loop
 # loop over each plan - 1 based to match the model
 
-count = -1;
-for iHat in range(1,MM+1):
+count = -1
+
+for row_num in range(1, num_rows + 1):
    # score it (tuple without parens again)
-	eff,failStat = calcEfficiency(a_g,a_b, MM_g,NN_g,MM_b, NN_b,MM, iHat)
+	(efficiency, result_code) = calcEfficiency(
+        good_plan_dict,
+        bad_plan_dict,
+        num_good_plan_rows,
+        num_good_plan_cols, 
+        num_bad_plan_rows, 
+        num_bad_plan_cols, 
+        row_num
+        )
+    
    # if it failed print message satying which failed
-	if failStat:
+	if result_code == 1:
 		count += 1
-		#print "DMU "+str(iHat)+" did not solve"
-		print("DMU "+str(iHat)+" did not solve")
+        
+		print(f"DMU {row_num} did not solve")
 	else:
       # otherwise increment the count for labeling and append results to csv
 		count += 1
 		print("count = ", count)
-		print("DMU "+str(iHat)+" has efficiency "+str(eff))
-		df_eff = df_eff.append({'Plan_Number_ID': count, 'DEA_Eff': eff},ignore_index=True)
+		print(f"DMU {row_num} has efficiency {efficiency}")
+      
+		results.append({'plan_id': count, 'dea_efficiency': efficiency})
 
-df_eff.to_csv('df_eff_g_b_EPS_justinplussteve_nov142025.csv')
-
-
-
-
-
+dea_eff = pd.DataFrame(results)
+dea_eff.to_csv('df_eff_g_b_EPS_justinplussteve_nov142025.csv')

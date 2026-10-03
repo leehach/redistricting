@@ -4,6 +4,8 @@ channels:
 dependencies:
   - python
   - pyomo
+  - pandas
+  - glpk
   # required
   # optional, testing, etc.
   # docs
