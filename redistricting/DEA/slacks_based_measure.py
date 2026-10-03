@@ -1,5 +1,3 @@
-# The following line is not needed in Python 3. The future is here.
-#from __future__ import division # safety with double division
 from pyomo.environ import *
 from pyomo.opt import SolverFactory
 from pyomo.opt import SolverStatus, TerminationCondition
@@ -77,7 +75,13 @@ def make_dict(df):
 # iHat is the row number
 
 def calculate_efficiency(good_plans_dict, bad_plans_dict, good_plan_num_rows, good_plan_num_cols, bad_plan_number_rows, bad_plan_number_cols, current_row):
+   if good_plan_num_rows != bad_plan_number_rows:
+      raise ValueError("Number of rows in good and bad plans are not equal!")
 
+   # records with values of 0 will mess up DEA
+   if any(v <= 0 for v in good_plans_dict.values()) or any(v <= 0 for v in bad_plans_dict.values()):
+      raise ValueError("All metric values must be greater than 0")
+   
    # Instantiate an empty pyomo model
    DEA_model = AbstractModel()
    
@@ -182,15 +186,15 @@ def calculate_efficiency(good_plans_dict, bad_plans_dict, good_plan_num_rows, go
    # sovle and get a report back
    Soln = Opt.solve(model)
 
-   # this line is redundant, solve() above already loads
-   model.solutions.load_from(Soln)
+   # a valid model always solves to optimal, so anything else means
+   # the model or the solver is broken - stop instead of writing a fake score
+   if not check_optimal_termination(Soln):
+      raise RuntimeError(
+         f"Plan {current_row} did not solve: "
+         f"{Soln.solver.termination_condition}"
+      )
 
-   # return the a success tupe (score,0) or failure tupel (0,1)
-   # however, this is broken ebcause we're saying if "optimal == optimal"
-   if str(TerminationCondition.optimal) == "optimal":
-      return (value(model.obj), 0)
-   else:
-      return (0,1)
+   return value(model.obj)
 
 
 # and now the execution loop
@@ -212,19 +216,9 @@ if __name__ == "__main__":
    (num_good_plan_rows, num_good_plan_cols, good_plan_dict) = make_dict(good_plans)
    (num_bad_plan_rows, num_bad_plan_cols, bad_plan_dict) = make_dict(bad_plans)
 
-   # compare rows - ensure they're the same size...
-   # this also doesn't throw... which... probably is a good idea?
-   if num_good_plan_rows != num_bad_plan_rows:
-      print("Incompatible numbers of rows in good and bad plan files...\n");
-   else:
-      num_rows = num_good_plan_rows
-
-
    count = -1
-
-   for row_num in range(1, num_rows + 1):
-      # score it (tuple without parens again)
-      (efficiency, result_code) = calculate_efficiency(
+   for row_num in range(1, num_good_plan_rows + 1):
+      efficiency = calculate_efficiency(
          good_plan_dict,
          bad_plan_dict,
          num_good_plan_rows,
@@ -234,18 +228,11 @@ if __name__ == "__main__":
          row_num
          )
       
-      # if it failed print message satying which failed
-      if result_code == 1:
-         count += 1
-         
-         print(f"DMU {row_num} did not solve")
-      else:
-         # otherwise increment the count for labeling and append results to csv
-         count += 1
-         print("count = ", count)
-         print(f"DMU {row_num} has efficiency {efficiency}")
-         
-         results.append({'plan_id': count, 'dea_efficiency': efficiency})
+      count += 1
+      print("count = ", count)
+      print(f"DMU {row_num} has efficiency {efficiency}")
+
+      results.append({'plan_id': count, 'dea_efficiency': efficiency})
 
    dea_eff = pd.DataFrame(results)
    dea_eff.to_csv('df_eff_g_b_EPS_justinplussteve_nov142025.csv')
