@@ -36,16 +36,6 @@ import os
 #folder_path = "C:\w64"
 #from folder_path import *
 
-# inputs
-
-# note no headers, so this is going off memory/investigation
-# Idea: we can keep a dict of measures who are good and bad and dynamically lookup to avoid this.
-good_plans = pd.read_csv("data/Plans1_g.csv", header=None) # metrics/critera for which "good is better" -> higher is better (i.e. compactness)
-bad_plans = pd.read_csv("data/Plans2_b.csv", header=None) # metrics/critera for whiich "bad is better" -> lower is better (i.e county splits)
-
-# one dict per scored plan; becomes a DataFrame after the loop
-results = []
-
 # formats each table into a 1-indexed dict - needed for pyomo
 # What is pyomo? It's OSS Optimization Modeling, it models problems to be sent to an external solver.
 
@@ -78,18 +68,6 @@ def make_dict(df):
 
 # M is rows and N is coluimns
     
-# (MM_g, NN_g, a_g) = make_dict(good_plans)
-# (MM_b, NN_b, a_b) = make_dict(bad_plans)
-(num_good_plan_rows, num_good_plan_cols, good_plan_dict) = make_dict(good_plans)
-(num_bad_plan_rows, num_bad_plan_cols, bad_plan_dict) = make_dict(bad_plans)
-
-# compare rows - ensure they're the same size...
-# this also doesn't throw... which... probably is a good idea?
-if num_good_plan_rows != num_bad_plan_rows:
-	print("Incompatible numbers of rows in good and bad plan files...\n");
-else:
-	num_rows = num_good_plan_rows
-
 
 # this scores one **plan** at a time, so that's row by row
 # This accepts:
@@ -218,32 +196,56 @@ def calcEfficiency(good_plans_dict, bad_plans_dict, good_plan_num_rows, good_pla
 # and now the execution loop
 # loop over each plan - 1 based to match the model
 
-count = -1
+if __name__ == "__main__":
+   # one dict per scored plan; becomes a DataFrame after the loop
+   results = []
+   
+   # inputs
 
-for row_num in range(1, num_rows + 1):
-   # score it (tuple without parens again)
-	(efficiency, result_code) = calcEfficiency(
-        good_plan_dict,
-        bad_plan_dict,
-        num_good_plan_rows,
-        num_good_plan_cols, 
-        num_bad_plan_rows, 
-        num_bad_plan_cols, 
-        row_num
-        )
-    
-   # if it failed print message satying which failed
-	if result_code == 1:
-		count += 1
-        
-		print(f"DMU {row_num} did not solve")
-	else:
-      # otherwise increment the count for labeling and append results to csv
-		count += 1
-		print("count = ", count)
-		print(f"DMU {row_num} has efficiency {efficiency}")
+   # note no headers, so this is going off memory/investigation
+   # Idea: we can keep a dict of measures who are good and bad and dynamically lookup to avoid this.
+   good_plans = pd.read_csv("data/Plans1_g.csv", header=None) # metrics/critera for which "good is better" -> higher is better (i.e. compactness)
+   bad_plans = pd.read_csv("data/Plans2_b.csv", header=None) # metrics/critera for whiich "bad is better" -> lower is better (i.e county splits)
+
+   # (MM_g, NN_g, a_g) = make_dict(good_plans)
+   # (MM_b, NN_b, a_b) = make_dict(bad_plans)
+   (num_good_plan_rows, num_good_plan_cols, good_plan_dict) = make_dict(good_plans)
+   (num_bad_plan_rows, num_bad_plan_cols, bad_plan_dict) = make_dict(bad_plans)
+
+   # compare rows - ensure they're the same size...
+   # this also doesn't throw... which... probably is a good idea?
+   if num_good_plan_rows != num_bad_plan_rows:
+      print("Incompatible numbers of rows in good and bad plan files...\n");
+   else:
+      num_rows = num_good_plan_rows
+
+
+   count = -1
+
+   for row_num in range(1, num_rows + 1):
+      # score it (tuple without parens again)
+      (efficiency, result_code) = calcEfficiency(
+         good_plan_dict,
+         bad_plan_dict,
+         num_good_plan_rows,
+         num_good_plan_cols, 
+         num_bad_plan_rows, 
+         num_bad_plan_cols, 
+         row_num
+         )
       
-		results.append({'plan_id': count, 'dea_efficiency': efficiency})
+      # if it failed print message satying which failed
+      if result_code == 1:
+         count += 1
+         
+         print(f"DMU {row_num} did not solve")
+      else:
+         # otherwise increment the count for labeling and append results to csv
+         count += 1
+         print("count = ", count)
+         print(f"DMU {row_num} has efficiency {efficiency}")
+         
+         results.append({'plan_id': count, 'dea_efficiency': efficiency})
 
-dea_eff = pd.DataFrame(results)
-dea_eff.to_csv('df_eff_g_b_EPS_justinplussteve_nov142025.csv')
+   dea_eff = pd.DataFrame(results)
+   dea_eff.to_csv('df_eff_g_b_EPS_justinplussteve_nov142025.csv')
