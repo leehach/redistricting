@@ -1,9 +1,15 @@
-from pyomo.environ import *
+from pyomo.environ import (
+    AbstractModel,
+    Constraint,
+    Objective,
+    RangeSet,
+    Var,
+    check_optimal_termination,
+    maximize,
+    value,
+)
 from pyomo.opt import SolverFactory
-from pyomo.opt import SolverStatus, TerminationCondition
-import numpy as np
 import pandas as pd
-import os
 
 # Slacks-based measure of DEA
 # What is it?
@@ -38,18 +44,19 @@ import os
 # What is pyomo? It's OSS Optimization Modeling, it models problems to be sent to an external solver.
 
 
-# note: leaving this as "make dict" - might refactor we'll see
+# Turns a DataFrame into a dictionary
+# chance we don't need to do this, as pyomo can take a DataFrame in some instances.
 def make_dict(df):
-    (M, N) = df.shape
-    print(M, N)
-    a = {}
-    for row in range(M):
-        for col in range(N):
-            a[(row + 1, col + 1)] = df.iloc[
-                row, col
-            ]  # iloc = integer location (pandas) / # plus 1 because the model below starts at one (RangeSet)
+    # a plain NumPy array - reading one cell is much faster than df.iloc
+    values = df.to_numpy()
+    (M, N) = values.shape
 
-    return (M, N, a)
+    # plus 1 because the model below starts at one (RangeSet)
+    return {
+        (row + 1, col + 1): values[row, col]
+        for row in range(M)
+        for col in range(N)
+    }
 
 
 # What's happening here we're turning the csv data from this:
@@ -60,36 +67,31 @@ def make_dict(df):
 
 # to
 
-# M = 3
-# N = 2
 # a = {
 #     (1, 1): 0.40,  (1, 2): 0.70,   # plan 1
 #     (2, 1): 0.50,  (2, 2): 0.60,   # plan 2
 #     (3, 1): 0.45,  (3, 2): 0.80,   # plan 3
 # }
 
-# M is rows and N is coluimns
+# M is rows and N is coluimns - the shape comes from df.shape, so make_dict
+# returns only the dict
 
 
 # this scores one **plan** at a time, so that's row by row
 # This accepts:
-# the "good" and "bad" plans
-# the shapes of each
-# then `MM`` unused variable that sets the definitive shape above - we could use it and loop in the function or we'll see
+# the "good" and "bad" plans, as DataFrames - the shapes come from them
 # iHat is the row number
 
 
-def calculate_efficiency(
-    good_plans_dict,
-    bad_plans_dict,
-    good_plan_num_rows,
-    good_plan_num_cols,
-    bad_plan_number_rows,
-    bad_plan_number_cols,
-    current_row,
-):
+def calculate_efficiency(good_plans, bad_plans, current_row):
+    (good_plan_num_rows, good_plan_num_cols) = good_plans.shape
+    (bad_plan_number_rows, bad_plan_number_cols) = bad_plans.shape
+
     if good_plan_num_rows != bad_plan_number_rows:
         raise ValueError("Number of rows in good and bad plans are not equal!")
+
+    good_plans_dict = make_dict(good_plans)
+    bad_plans_dict = make_dict(bad_plans)
 
     # records with values of 0 will mess up DEA
     if any(v <= 0 for v in good_plans_dict.values()) or any(
@@ -109,14 +111,9 @@ def calculate_efficiency(
     # so this is all setup
     DEA_model.good_cols = RangeSet(1, good_plan_num_cols)  # range of columns in good
     DEA_model.bad_cols = RangeSet(1, bad_plan_number_cols)  # range of columns in bad
-    DEA_model.num_cols = Set(
-        initialize=DEA_model.good_cols | DEA_model.bad_cols
-    )  # Set of the union of column indicies -> so {1,2,3} - is dead code - unused
 
-    # we do the same as above for the rows - set up RangeSets and a Set with the union of all row indicies
-    DEA_model.good_rows = RangeSet(1, good_plan_num_rows)
-    DEA_model.bad_rows = RangeSet(1, bad_plan_number_rows)
-    DEA_model.num_rows = Set(initialize=DEA_model.good_rows | DEA_model.bad_rows)
+    # one index per plan (row) - good and bad have the same rows, checked above
+    DEA_model.plans = RangeSet(1, good_plan_num_rows)
 
     # variables in pyomo are things are numbers that the solve will fill in - what it picks.
     # It'll take later constraints and our objective, and find the "best" value
@@ -143,11 +140,6 @@ def calculate_efficiency(
 
     DEA_model.obj = Objective(rule=obj_rule, sense=maximize)
 
-    ### ignoring for now ###
-    # def obj_rule (DEA_model):
-    #  return sum(a_g[iHat,i]*DEA_model.g[i] for i in DEA_model.N_g)- sum(a_b[iHat,j]*DEA_model.b[j] for j in DEA_model.N_b) - DEA_model.v
-    # DEA_model.obj = Objective(rule = obj_rule, sense = maximize)
-
     # This time we're pairing a rule with a Constraint rather than an Objective
     # This calculates, for each row, the sum of each metric times its weight
     # We don't know the weight! That's for the solver to figure out - we added it as a variable, remember.
@@ -170,25 +162,25 @@ def calculate_efficiency(
     DEA_model.efficency_constraint = Constraint(rule=efficiency_constraint_rule)
 
     # this is the core constraint, hence principal.
-    # It takes one constraint per plan, because we set it up that way about with the indexed variable
+    # It makes one constraint per plan, because it is indexed by `plans`
     # So this is an "Indexed constraint" enforcing the good score of a plan minus the bad score of a plan is <= v - the baseline.
     # Now, the solver picks the baseline balancing the rules we're attaching.
     # i "walks across" the columns of a given plan's row and sums em, same for the bad and subtracts
-    def principal_constraint_rule(model, rows):
+    def principal_constraint_rule(model, plan):
         return (
             sum(
-                good_plans_dict[rows, i] * model.good_weights[i]
+                good_plans_dict[plan, i] * model.good_weights[i]
                 for i in model.good_cols
             )
             - model.baseline
             - sum(
-                bad_plans_dict[rows, j] * model.bad_weights[j] for j in model.bad_cols
+                bad_plans_dict[plan, j] * model.bad_weights[j] for j in model.bad_cols
             )
             <= 0.0
         )
 
     DEA_model.principal_constraint = Constraint(
-        DEA_model.num_rows, rule=principal_constraint_rule
+        DEA_model.plans, rule=principal_constraint_rule
     )
 
     # now constaint that is just an expr - you can pass a short form.
@@ -241,46 +233,47 @@ def calculate_efficiency(
     return value(model.obj)
 
 
-# and now the execution loop
-# loop over each plan - 1 based to match the model
+DIRECTIONS = {"higher", "lower"}
 
-if __name__ == "__main__":
-    # one dict per scored plan; becomes a DataFrame after the loop
-    results = []
 
-    # inputs
+def score_plans(metrics: pd.DataFrame, direction: dict[str, str]) -> pd.Series:
+    """Return the SBM score of each plan (row) in `metrics`.
 
-    # note no headers, so this is going off memory/investigation
-    # Idea: we can keep a dict of measures who are good and bad and dynamically lookup to avoid this.
-    good_plans = pd.read_csv(
-        "data/Plans1_g.csv", header=None
-    )  # metrics/critera for which "good is better" -> higher is better (i.e. compactness)
-    bad_plans = pd.read_csv(
-        "data/Plans2_b.csv", header=None
-    )  # metrics/critera for whiich "bad is better" -> lower is better (i.e county splits)
+    `metrics` has one row per plan and one column per metric. `direction`
+    maps every column to "higher" (higher is better) or "lower" (lower is
+    better). The result has the same index as `metrics`.
+    """
+    missing = set(metrics.columns) - set(direction)
+    if missing:
+        raise ValueError(f"No direction given for metrics: {sorted(missing)}")
 
-    # (MM_g, NN_g, a_g) = make_dict(good_plans)
-    # (MM_b, NN_b, a_b) = make_dict(bad_plans)
-    (num_good_plan_rows, num_good_plan_cols, good_plan_dict) = make_dict(good_plans)
-    (num_bad_plan_rows, num_bad_plan_cols, bad_plan_dict) = make_dict(bad_plans)
+    unknown = set(direction) - set(metrics.columns)
+    if unknown:
+        raise ValueError(f"Direction given for unknown metrics: {sorted(unknown)}")
 
-    count = -1
-    for row_num in range(1, num_good_plan_rows + 1):
-        efficiency = calculate_efficiency(
-            good_plan_dict,
-            bad_plan_dict,
-            num_good_plan_rows,
-            num_good_plan_cols,
-            num_bad_plan_rows,
-            num_bad_plan_cols,
-            row_num,
+    invalid = set(direction.values()) - DIRECTIONS
+    if invalid:
+        raise ValueError(
+            f"Direction must be 'higher' or 'lower', got: {sorted(invalid)}"
         )
 
-        count += 1
-        print("count = ", count)
-        print(f"DMU {row_num} has efficiency {efficiency}")
+    higher = [name for name in metrics.columns if direction[name] == "higher"]
+    lower = [name for name in metrics.columns if direction[name] == "lower"]
 
-        results.append({"plan_id": count, "dea_efficiency": efficiency})
+    # with no "higher" metric, the model caps every score at 0
+    if not higher:
+        raise ValueError("At least one metric must have direction 'higher'")
 
-    dea_eff = pd.DataFrame(results)
-    dea_eff.to_csv("df_eff_g_b_EPS_justinplussteve_nov142025.csv")
+    # `> 0` is False for NaN, so this also catches blank cells
+    if not (metrics > 0).all().all():
+        raise ValueError("All metric values must be greater than 0")
+
+    higher_metrics = metrics[higher]
+    lower_metrics = metrics[lower]
+
+    scores = [
+        calculate_efficiency(higher_metrics, lower_metrics, row)
+        for row in range(1, len(metrics) + 1)
+    ]
+
+    return pd.Series(scores, index=metrics.index, name="sbm_score")
