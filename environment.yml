@@ -6,6 +6,8 @@ dependencies:
   - pytest
   - pysal
   - shapely
+  - geopandas
+  - pandas
   # required
   # optional, testing, etc.
   # docs
