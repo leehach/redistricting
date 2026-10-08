@@ -3,6 +3,9 @@ channels:
   - conda-forge
 dependencies:
   - python
+  - pyomo
+  - pandas
+  - glpk
   # required
   # optional, testing, etc.
   # docs
