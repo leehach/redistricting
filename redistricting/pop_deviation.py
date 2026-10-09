@@ -1,35 +1,50 @@
-import os
 import sys
+import warnings
+
+import geopandas as gpd
 import pandas as pd
 
-# Usage: python pop_deviation.py plan1.csv plan2.csv ...
-# Free Census API key: https://api.census.gov/data/key_signup.html
-CENSUS_KEY = ""
-POP_FILE = "pa_vtd_population_2020.csv"
 
-# Download 2020 Census population for every PA voting district (once)
-if not os.path.exists(POP_FILE):
-    url = ("https://api.census.gov/data/2020/dec/pl?get=P1_001N"
-           "&for=voting%20district:*&in=state:42%20county:*&key=" + CENSUS_KEY)
-    data = pd.read_json(url, dtype=False)
-    data.columns = data.iloc[0]
-    data = data[1:]
-    data["GEOID"] = data["state"] + data["county"] + data["voting district"]
-    data["Population"] = data["P1_001N"].astype(int)
-    data[["GEOID", "Population"]].to_csv(POP_FILE, index=False)
+def population_deviation(precincts, plan, geoid_col="GEOID20",
+                         pop_col="P0010001", district_col="District"):
+    """
+    Population and deviation from ideal for each district in a plan.
 
-pop = pd.read_csv(POP_FILE, dtype={"GEOID": str})
+    precincts : (Geo)DataFrame with one row per precinct, including
+                geoid_col and pop_col (e.g. the PA voting district shapefile).
+    plan      : DataFrame assigning each precinct (geoid_col) to a district
+                (district_col).
 
-for plan_file in sys.argv[1:]:
-    plan = pd.read_csv(plan_file, dtype={"GEOID20": str}).rename(columns={"GEOID20": "GEOID"})
-    unmatched = (~plan["GEOID"].isin(pop["GEOID"])).sum()
-    plan = plan.merge(pop, on="GEOID")
-    district_pop = plan.groupby("District")["Population"].sum()
+    Returns a DataFrame indexed by district with columns
+    Population, Deviation (people), and Deviation %.
+    """
+    merged = plan[[geoid_col, district_col]].merge(
+        precincts[[geoid_col, pop_col]], on=geoid_col, how="left")
+
+    unmatched = merged[pop_col].isna().sum()
+    if unmatched:
+        warnings.warn(f"{unmatched} precinct(s) in the plan have no population match")
+
+    district_pop = merged.groupby(district_col)[pop_col].sum()
     ideal = district_pop.mean()
-    deviation = (district_pop - ideal) / ideal * 100
 
-    print(f"\n{plan_file}")
-    print(f"Unmatched GEOIDs: {unmatched}")
-    print(pd.DataFrame({"Population": district_pop, "Deviation %": deviation.round(2)}))
-    print(f"Ideal population: {ideal:,.0f}")
-    print(f"Overall range: {deviation.max() - deviation.min():.2f}%")
+    return pd.DataFrame({
+        "Population": district_pop.astype(int),
+        "Deviation": (district_pop - ideal).round(1),
+        "Deviation %": ((district_pop - ideal) / ideal * 100).round(2),
+    })
+
+
+if __name__ == "__main__":
+    # Usage: python pop_deviation.py WP_VotingDistricts.shp plan1.csv plan2.csv ...
+    precincts = gpd.read_file(sys.argv[1])
+
+    for plan_file in sys.argv[2:]:
+        plan = pd.read_csv(plan_file, dtype={"GEOID20": str})
+        result = population_deviation(precincts, plan)
+        ideal = result["Population"].mean()
+
+        print(f"\n{plan_file}")
+        print(result)
+        print(f"Ideal population: {ideal:,.0f}")
+        print(f"Overall range: {result['Deviation %'].max() - result['Deviation %'].min():.2f}%")
