@@ -5,9 +5,9 @@ from pytest import approx, raises
 
 from redistricting.DEA.slacks_based_measure import calculate_efficiency, score_plans
 
-mock_good_plans = pd.DataFrame([0.40, 0.50, 0.50])
+mock_higher_metrics = pd.DataFrame([0.40, 0.50, 0.50])
 
-mock_bad_plans = pd.DataFrame([10, 6, 8])
+mock_lower_metrics = pd.DataFrame([10, 6, 8])
 
 # Plans A, B, C from the hand-checked examples in the SBM notes.
 mock_metrics = pd.DataFrame(
@@ -67,28 +67,28 @@ def test_score_plans_nan_raises():
 
 
 def test_calculate_efficiency_rows_mismatch():
-    with raises(ValueError, match="Number of rows in good and bad plans are not equal!"):
-        calculate_efficiency(pd.DataFrame([0.40, 0.50]), mock_bad_plans, 1)
+    with raises(ValueError, match="Number of rows in higher and lower metrics are not equal!"):
+        calculate_efficiency(pd.DataFrame([0.40, 0.50]), mock_lower_metrics, 1)
 
 def test_calculate_efficiency_zero_raises():
-    bad_with_zero = pd.DataFrame([10, 0, 8])
+    lower_with_zero = pd.DataFrame([10, 0, 8])
 
     with raises(ValueError):
-        calculate_efficiency(mock_good_plans, bad_with_zero, 1)
+        calculate_efficiency(mock_higher_metrics, lower_with_zero, 1)
 
-    good_with_zero = pd.DataFrame([0, 0, 8])
+    higher_with_zero = pd.DataFrame([0, 0, 8])
 
     with raises(ValueError):
-        calculate_efficiency(good_with_zero, mock_bad_plans, 1)
+        calculate_efficiency(higher_with_zero, mock_lower_metrics, 1)
 
 def test_calculate_efficiency_negative_raises():
-    bad_with_lt_zero = pd.DataFrame([10, -0.1, 8])
+    lower_with_lt_zero = pd.DataFrame([10, -0.1, 8])
 
     with raises(ValueError):
-        calculate_efficiency(mock_good_plans, bad_with_lt_zero, 1)
+        calculate_efficiency(mock_higher_metrics, lower_with_lt_zero, 1)
 
-    good_with_lt_zero = pd.DataFrame([-0.01, 2, 8])
+    higher_with_lt_zero = pd.DataFrame([-0.01, 2, 8])
 
     with raises(ValueError):
-        calculate_efficiency(good_with_lt_zero, mock_bad_plans, 1)
+        calculate_efficiency(higher_with_lt_zero, mock_lower_metrics, 1)
 
