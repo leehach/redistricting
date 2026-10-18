@@ -12,6 +12,7 @@ Each plan comes back with the same columns the old Joined_Data.gpkg layers had:
 Use from another script / notebook:
   from step3_plans import Plans
   plans = Plans.load()                              # downloads everything once
+  plans = Plans.load(census_api_key="...")          # or pass the Census key directly
   plans.names                                       # list of plan names
   gdf = plans.get("allentown_map_by_as_jan-4-2022")                  # GeoDataFrame
   df  = plans.get("allentown_map_by_as_jan-4-2022", geometry=False)  # pandas DataFrame
@@ -19,6 +20,8 @@ Use from another script / notebook:
 
 Requirements:  pip install geopandas pandas requests pyogrio
 """
+
+from __future__ import annotations
 
 import geopandas as gpd
 import pandas as pd
@@ -38,9 +41,10 @@ class Plans:
         self.assignments = assignments
 
     @classmethod
-    def load(cls) -> Plans:
-        """Download the shapes, the Census data and every plan (steps 1 and 2)."""
-        return cls(load_vtds(), fetch_census(), fetch_plan_assignments())
+    def load(cls, census_api_key: str | None = None) -> Plans:
+        """Download the shapes, the Census data and every plan (steps 1 and 2).
+        census_api_key defaults to the CENSUS_API_KEY environment variable."""
+        return cls(load_vtds(), fetch_census(census_api_key), fetch_plan_assignments())
 
     @staticmethod
     def _clean_census(census: pd.DataFrame) -> pd.DataFrame:

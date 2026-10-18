@@ -13,9 +13,10 @@ Use from another script / notebook:
   census = fetch_census()       # one row per voting district, friendly column names
   codebook = fetch_codebook()   # each column's Census variable code and official label
 
-API key (required): read from the CENSUS_API_KEY environment variable. If it
-isn't set, the script prints setup instructions and asks you to type the key
-in the terminal (used for that run only). Keep keys out of the code.
+API key (required): pass it as fetch_census(api_key=...) or set the
+CENSUS_API_KEY environment variable. If neither is given, MissingAPIKeyError
+is raised with setup instructions. Nothing in this module prompts for input,
+so it works the same from a script, a notebook or a web application.
 
 Requirements:  pip install pandas requests
 """
@@ -29,45 +30,26 @@ API_URL = "https://api.census.gov/data/2020/dec/pl"
 STATE_FIPS = "42"  # Pennsylvania
 KEY_SIGNUP_URL = "https://api.census.gov/data/key_signup.html"
 
-KEY_HELP = f"""
-------------------------------------------------------------------------
-No Census API key found.
+KEY_HELP = f"""No Census API key found.
 
-The Census Bureau needs a free API key to send you data.
-  - Don't have one? Sign up here (it arrives by email in a few minutes):
-      {KEY_SIGNUP_URL}
+Pass one as fetch_census(api_key=...) or set the CENSUS_API_KEY environment
+variable. Keys are free: {KEY_SIGNUP_URL}
 
-To save your key so you're never asked again (one-time setup), run these
-in your terminal with the gus8066 environment active:
-
+To save it in the gus8066 conda environment (one-time setup):
   conda env config vars set CENSUS_API_KEY=PASTE_KEY_HERE -n gus8066
   conda deactivate
-  conda activate gus8066
-  echo $env:CENSUS_API_KEY        <- should print your key
-
-Or just paste your key below to use it for this run only.
-------------------------------------------------------------------------
-"""
-
-_api_key: str | None = None
+  conda activate gus8066"""
 
 
-def get_api_key() -> str:
-    """The Census API key: from CENSUS_API_KEY, or typed in by the user (once per run)."""
-    global _api_key
-    if _api_key:
-        return _api_key
+class MissingAPIKeyError(RuntimeError):
+    """No Census API key was passed in or found in CENSUS_API_KEY."""
 
-    key = os.environ.get("CENSUS_API_KEY", "").strip()
+
+def get_api_key(api_key: str | None = None) -> str:
+    """The key passed in, else CENSUS_API_KEY. Raises MissingAPIKeyError if neither."""
+    key = (api_key or os.environ.get("CENSUS_API_KEY", "")).strip()
     if not key:
-        print(KEY_HELP)
-        try:
-            key = input("Enter your Census API key: ").strip()
-        except EOFError:  # no one at the keyboard (e.g. run from another program)
-            key = ""
-        if not key:
-            raise RuntimeError(f"A Census API key is required. Get a free one at {KEY_SIGNUP_URL}")
-    _api_key = key
+        raise MissingAPIKeyError(KEY_HELP)
     return key
 
 
@@ -104,9 +86,9 @@ VARIABLES = {
 }
 
 
-def fetch_vtd_data() -> pd.DataFrame:
+def fetch_vtd_data(api_key: str | None = None) -> pd.DataFrame:
     """Request each PA county separately and stack the results."""
-    api_key = get_api_key()
+    api_key = get_api_key(api_key)
     frames = []
     for county in PA_COUNTIES:
         url = (f"{API_URL}?get=NAME,{','.join(VARIABLES)}"
@@ -150,10 +132,12 @@ def add_percentages(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def fetch_census() -> pd.DataFrame:
-    """One row per PA voting district: GEOID, names, counts and percentages."""
+def fetch_census(api_key: str | None = None) -> pd.DataFrame:
+    """One row per PA voting district: GEOID, names, counts and percentages.
+    api_key defaults to the CENSUS_API_KEY environment variable."""
+    api_key = get_api_key(api_key)
     print("Requesting PA voting-district data from the Census API ...")
-    df = add_percentages(fetch_vtd_data())
+    df = add_percentages(fetch_vtd_data(api_key))
 
     front = ["GEOID", "VTD_NAME_CENSUS", "COUNTYFP"]
     rest = [c for c in df.columns if c not in front + ["state", "voting district"]]

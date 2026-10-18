@@ -54,32 +54,24 @@ def plan_name(repo_path: str) -> str:
 
 
 # 2. Read one plan CSV into a clean GEOID -> district table
+EXPECTED_HEADER = ["GEOID20", "District"]
+GEOID_LENGTH = 11  # 2020 voting districts: state (2) + county (3) + VTD (6)
+
+
 def read_assignment(text: str) -> pd.DataFrame:
-    df = pd.read_csv(io.StringIO(text), dtype=str, header=None, sep=None, engine="python")
-    df = df.apply(lambda s: s.str.strip())
+    """Parse a plan CSV with the header 'GEOID20,District'.
+    Rows with a blank District are treated as unassigned and dropped."""
+    df = pd.read_csv(io.StringIO(text), dtype={"GEOID20": str}, skipinitialspace=True)
+    if list(df.columns) != EXPECTED_HEADER:
+        raise ValueError(f"expected header {EXPECTED_HEADER}, found {list(df.columns)}")
 
-    first = df.iloc[0].fillna("")
-    if not first.str.fullmatch(r"[0-9A-Za-z]*\d[0-9A-Za-z]*").all() or \
-            first.str.contains("geoid|district|id", case=False).any():
-        df.columns = first.tolist()
-        df = df.iloc[1:].reset_index(drop=True)
-    else:
-        df.columns = [f"col{i}" for i in range(df.shape[1])]
+    bad = ~df["GEOID20"].str.fullmatch(rf"\d{{{GEOID_LENGTH}}}", na=False)
+    if bad.any():
+        raise ValueError(f"{bad.sum()} GEOID20 values are not {GEOID_LENGTH}-digit VTD codes, "
+                         f"e.g. {df.loc[bad, 'GEOID20'].iloc[0]!r}")
 
-    lengths = {c: df[c].dropna().str.len().median() for c in df.columns}
-    geoid_col = max(lengths, key=lengths.get)
-    others = [c for c in df.columns if c != geoid_col]
-    named = [c for c in others if "dist" in str(c).lower()]
-    district_col = named[0] if named else min(others, key=lambda c: df[c].nunique())
-
-    out = pd.DataFrame({"GEOID": df[geoid_col].str.replace(r"\.0$", "", regex=True),
-                        "district": df[district_col]})
-    out = out[out["district"].notna() & ~out["district"].isin(["", "ZZ", "zz", "0", "NA", "nan"])]
-    out = out.drop_duplicates("GEOID")
-    num = pd.to_numeric(out["district"], errors="coerce")
-    if num.notna().all():
-        out["district"] = num.astype(int)
-    return out.reset_index(drop=True)
+    df = df.rename(columns={"GEOID20": "GEOID", "District": "district"})
+    return df.dropna(subset=["district"]).astype({"district": int}).reset_index(drop=True)
 
 
 def fetch_plan_assignments() -> dict[str, pd.DataFrame]:
@@ -89,11 +81,11 @@ def fetch_plan_assignments() -> dict[str, pd.DataFrame]:
 
     assignments = {}
     for path in paths:
-        plan = plan_name(path)
         try:
-            assignments[plan] = read_assignment(download_text(path))
-        except Exception as e:
-            print(f"  !! Skipped {plan}: {e}")
+            assignments[plan_name(path)] = read_assignment(download_text(path))
+        except ValueError as e:
+            e.add_note(f"while reading {path}")
+            raise
     return assignments
 
 
