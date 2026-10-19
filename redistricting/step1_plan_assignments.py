@@ -55,7 +55,6 @@ def plan_name(repo_path: str) -> str:
 
 # 2. Read one plan CSV into a clean GEOID -> district table
 EXPECTED_HEADER = ["GEOID20", "District"]
-GEOID_LENGTH = 11  # 2020 voting districts: state (2) + county (3) + VTD (6)
 
 
 def read_assignment(text: str) -> pd.DataFrame:
@@ -64,11 +63,6 @@ def read_assignment(text: str) -> pd.DataFrame:
     df = pd.read_csv(io.StringIO(text), dtype={"GEOID20": str}, skipinitialspace=True)
     if list(df.columns) != EXPECTED_HEADER:
         raise ValueError(f"expected header {EXPECTED_HEADER}, found {list(df.columns)}")
-
-    bad = ~df["GEOID20"].str.fullmatch(rf"\d{{{GEOID_LENGTH}}}", na=False)
-    if bad.any():
-        raise ValueError(f"{bad.sum()} GEOID20 values are not {GEOID_LENGTH}-digit VTD codes, "
-                         f"e.g. {df.loc[bad, 'GEOID20'].iloc[0]!r}")
 
     df = df.rename(columns={"GEOID20": "GEOID", "District": "district"})
     return df.dropna(subset=["district"]).astype({"district": int}).reset_index(drop=True)
