@@ -142,8 +142,6 @@ def population_polygon(
     point always inside the geounit) is inside the hull. Geounits cut by
     the hull edge count fully or not at all.
     """
-    # TODO(Ben): whole geounits by point is a placeholder. Ask Lee whether
-    # to weight cut geounits by the share of their area inside the hull.
     points = geounits.representative_point()
 
     hull_population = np.array(
@@ -177,8 +175,6 @@ def _check_inputs(geoids: pd.Index, geounits: gpd.GeoDataFrame, measure: str):
 def _score_plan(
     plan: pd.Series, geounits: gpd.GeoDataFrame, measure: str
 ) -> float:
-    # TODO(Ben): mean is a placeholder. Ask Lee how DistrictBuilder turned
-    # district scores into one plan score for the DEA paper.
     return float(_score_districts(plan, geounits, measure).mean())
 
 
