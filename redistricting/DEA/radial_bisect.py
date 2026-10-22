@@ -1,22 +1,27 @@
 """Score redistricting plans with a radial measure of DEA, found by bisection.
 
-Radial DEA determines how efficient a redistricting plan is relative to other plans.
-Bisection is the method the code uses to calculate that efficiency score.
-A blend is a weighted combination of one or more plans' metric values (`plan_shares`).
+Radial DEA (Data Envelopment Analysis) scores how efficient each
+redistricting plan is compared with the other plans. Bisection is how the
+code finds that score.
 
-=> What's the smallest θ for which a feasible blend exists? <=
-(Smaller θ means demanding bigger improvements to the measure)
-To do this, we're essentially binary traversing (bisecting) theta:
-1 first; then 0.5; then 0 or 0.75; etc, using the Solver
-to attempt to find a blend w/ lowest theta. Only needs one, then
-stops, hence the `Objective(expr=0)`
+Words used in this file:
+    plan    one row of `metrics` (one way to draw the districts)
+    metric  one column of `metrics`, such as compactness or county splits
+    blend   a weighted mix of real plans; the weights are `plan_shares` (λ)
+    θ       theta, the score: a number from 0 to 1, where 1 is efficient
 
-I think the math/constraints are intuitive. ONe thing ot mention is the solver
-needs to satisfy both the compactness and county splits not some combo or one or the other.
+The one function, calculate_radial_efficiency, builds the model for one
+plan, then bisects θ to find its score. make_dict (in pyomo_data.py)
+reshapes each table for Pyomo.
 
-A radial score asks one question: by what one factor θ (between 0 and 1)
-can a plan shrink every lower metric and grow every higher metric (by
-1 / θ), all at once, and still match a blend of real plans? A higher
+THE QUESTION: what is the smallest θ at which a blend of real plans beats
+the plan on EVERY metric at the same time? (Smaller θ asks for a bigger
+improvement.) The blend must meet every metric together, not just one of
+them, and not some average of them.
+
+A radial score asks this as one factor θ (between 0 and 1): can a blend
+shrink every lower metric to θ times the plan's value and grow every
+higher metric to the plan's value divided by θ, all at once? A higher
 metric is better when it goes up. A lower metric is better when it goes
 down.
 
@@ -53,13 +58,39 @@ compactness and P2 has too many splits. But 1/3 of P1 plus 2/3 of P2 gives
 compactness 1/3 * 1 + 2/3 * 4 = 3 and splits 3. So D scores 2/3. The
 shares (1/3 and 2/3) are 0 or more and add up to 1.
 
-Why bisect: θ shrinks the lower metrics and 1 / θ grows the higher ones,
-so one linear program cannot solve for θ itself. But for one fixed θ,
-"does a blend exist?" is a plain linear program. Pyomo builds it and GLPK
-solves it. We stop when the range of θ is narrower than TOLERANCE.
+Why bisect: θ shrinks the lower metrics and 1 / θ grows the higher ones.
+1 / θ is not linear, so one linear program cannot solve for θ itself. But
+for one fixed θ, "does a blend exist?" is a plain yes/no linear program.
+Pyomo builds it and GLPK solves it.
+
+Bisection is a binary search on θ. Start with the range [0.001, 1]. Try
+the middle. If a blend exists, the answer is at or below the middle, so
+keep the lower half. If not, keep the upper half. Stop when the range is
+narrower than TOLERANCE. Each try cuts the range in half, so each plan
+takes about 14 solves. For plan A:
+
+    try   θ        blend?   new range
+    1     0.5005   no       0.5005 .. 1
+    2     0.7502   no       0.7502 .. 1
+    3     0.8751   yes      0.7502 .. 0.8751
+    4     0.8127   yes      0.7502 .. 0.8127
+    5     0.7815   no       0.7815 .. 0.8127
+    ...                     closes in on 0.8
+
+KNOWN LIMITATION: a plan with 0 on EVERY metric scores about THETA_FLOOR,
+even when no plan beats it. A 0 takes θ out of that metric's constraint
+(θ * 0 = 0 and 0 / θ = 0), so with all 0s every θ works and the search
+falls to the floor. For example:
+
+    lower only, splits (0), (4)               ->  0.001, 0.001
+    (compactness, splits) (0, 0), (0.5, 4)    ->  0.001, 1
+
+In both, the first plan should score 1. A score near 0 is right only
+when some blend that meets the plan's 0 limits has a higher metric above
+0. Higher-only (0), (0.5) is such a case. A plan with at least one
+value above 0 scores as usual.
 """
 
-import pandas as pd
 from pyomo.environ import (
     ConcreteModel,
     Constraint,
@@ -72,7 +103,7 @@ from pyomo.environ import (
 )
 from pyomo.opt import SolverFactory, SolverStatus, TerminationCondition
 
-DIRECTIONS = {"higher", "lower"}
+from redistricting.DEA.pyomo_data import make_dict
 
 # What the solver reports when no blend exists. GLPK finds the problem
 # infeasible, but Pyomo's reader labels it "unbounded" (see PRESOLVE below).
@@ -93,73 +124,45 @@ THETA_FLOOR = 0.001
 TOLERANCE = 0.0001
 
 
-def radial_scores(metrics: pd.DataFrame, direction: dict[str, str]) -> pd.Series:
-    """Return the radial score of each plan (row) in `metrics`.
-
-    `metrics` has one row per plan and one column per metric. `direction`
-    maps every column to "higher" (higher is better) or "lower" (lower is
-    better). The result has the same index as `metrics`. A score of 1 means
-    the plan is efficient. Values must be 0 or greater.
-    """
-    missing = set(metrics.columns) - set(direction)
-    if missing:
-        raise ValueError(f"No direction given for metrics: {sorted(missing)}")
-
-    unknown = set(direction) - set(metrics.columns)
-    if unknown:
-        raise ValueError(f"Direction given for unknown metrics: {sorted(unknown)}")
-
-    invalid = set(direction.values()) - DIRECTIONS
-    if invalid:
-        raise ValueError(
-            f"Direction must be 'higher' or 'lower', got: {sorted(invalid)}"
-        )
-
-    if metrics.shape[1] == 0:
-        raise ValueError("Give at least one metric")
-
-    # `>= 0` is False for NaN, so this also catches blank cells
-    all_valid = (metrics >= 0).to_numpy().all()
-    if not all_valid:
-        raise ValueError("All metric values must be 0 or greater")
-
-    higher = [name for name in metrics.columns if direction[name] == "higher"]
-    lower = [name for name in metrics.columns if direction[name] == "lower"]
-
-    scores = [
-        calculate_radial_efficiency(metrics[higher], metrics[lower], row)
-        for row in range(1, len(metrics) + 1)
-    ]
-
-    return pd.Series(scores, index=metrics.index, name="radial_score")
-
-
 def calculate_radial_efficiency(higher_metrics, lower_metrics, current_row):
     """Return the radial score (θ) of one plan.
 
     `higher_metrics` and `lower_metrics` have one row per plan, in the same
     order. Their columns are the higher-is-better and lower-is-better
     metrics. `current_row` is the plan to score, counted from 1.
-    radial_scores calls this once per row.
+    dea.score calls this once per plan.
 
-    Raises ValueError for mismatched rows or values below 0 (or blank), and
-    RuntimeError if the solver fails for a reason other than "no blend
-    exists".
+    Raises ValueError for mismatched rows, no metrics, or values below 0
+    (or blank), and RuntimeError if the solver fails for a reason other
+    than "no blend exists".
     """
+    # STEP 1: get the sizes and turn the tables into dicts that Pyomo can
+    # read.
     (plan_count, higher_col_count) = higher_metrics.shape
     (lower_plan_count, lower_col_count) = lower_metrics.shape
 
     if plan_count != lower_plan_count:
         raise ValueError("Number of rows in higher and lower metrics are not equal!")
 
-    higher_dict = _make_dict(higher_metrics)
-    lower_dict = _make_dict(lower_metrics)
+    if higher_col_count + lower_col_count == 0:
+        raise ValueError("Give at least one metric")
+
+    higher_dict = make_dict(higher_metrics)
+    lower_dict = make_dict(lower_metrics)
 
     # `>= 0` is False for NaN, so this also catches blank cells
     all_valid = all(v >= 0 for v in [*higher_dict.values(), *lower_dict.values()])
     if not all_valid:
         raise ValueError("All metric values must be 0 or greater")
 
+    # STEP 2: build the model once. Only θ changes between solves.
+    #
+    # In math, for plan o (the one we score) and plans j = 1..n:
+    #
+    #     find   λ_j >= 0
+    #     so     Σ λ_j = 1                              (shares add to 1)
+    #            Σ λ_j * lower_j  <= θ * lower_o        (each lower metric)
+    #            Σ λ_j * higher_j >= higher_o / θ       (each higher metric)
     model = ConcreteModel()
 
     # Sets (index ranges), counted from 1
@@ -167,21 +170,29 @@ def calculate_radial_efficiency(higher_metrics, lower_metrics, current_row):
     model.lower_cols = RangeSet(1, lower_col_count)
     model.plans = RangeSet(1, plan_count)
 
-    # How much of each plan goes into the blend (the λ in the DEA math)
+    # How much of each plan goes into the blend (the λ in the DEA math).
+    # These are the only variables: the solver picks them.
     model.plan_shares = Var(model.plans, within=NonNegativeReals)
 
-    # θ. It is mutable so the search can change it between solves without
-    # building the model again.
+    # θ. It is a Param, not a Var: the solver does not pick it, the
+    # bisection loop does. It is mutable so the loop can change it between
+    # solves without building the model again.
     model.theta = Param(initialize=1.0, mutable=True)
 
-    # We only ask if a blend exists, so the objective does nothing.
+    # We only ask if a blend exists (yes or no), so there is nothing to
+    # minimize. Any blend that meets the constraints is enough.
     model.obj = Objective(expr=0)
 
+    # The shares add to 1, so the blend is a weighted average of plans.
+    # Example: 1/3 of P1 = (1, 1) plus 2/3 of P2 = (4, 4) gives (3, 3).
     model.shares_sum_constraint = Constraint(
         expr=sum(model.plan_shares[plan] for plan in model.plans) == 1
     )
 
     # The blend's lower metric can be at most θ times the scored plan's.
+    # Plan A at θ = 0.8: the blend can have at most 10 * 0.8 = 8 splits.
+    # Pyomo calls this rule once per lower metric, so each one gets its own
+    # constraint.
     def lower_shrink_constraint_rule(model, metric):
         return (
             sum(
@@ -196,7 +207,8 @@ def calculate_radial_efficiency(higher_metrics, lower_metrics, current_row):
     )
 
     # The blend's higher metric must be at least the scored plan's divided
-    # by θ.
+    # by θ. Plan A at θ = 0.8: the blend needs at least 0.40 / 0.8 = 0.50
+    # compactness. Pyomo calls this rule once per higher metric.
     def higher_grow_constraint_rule(model, metric):
         return (
             sum(
@@ -210,6 +222,8 @@ def calculate_radial_efficiency(higher_metrics, lower_metrics, current_row):
         model.higher_cols, rule=higher_grow_constraint_rule
     )
 
+    # STEP 3: set up the solver.
+    #
     # GLPK (GNU Linear Programming Kit) is a free, open-source solver, so it
     # needs no license. It installs from conda-forge (see environment.yml).
     solver = SolverFactory("glpk")
@@ -224,23 +238,29 @@ def calculate_radial_efficiency(higher_metrics, lower_metrics, current_row):
     # The class data scores the same with presolve on or off, and it is not
     # slower. Without this line, GLPK reports "other" for no blend, so the
     # tests fail with RuntimeError. If "other" were accepted as "no blend"
-    # instead, test_radial_scores_allows_zero would score 0.998, not 1.
+    # instead, test_radial_allows_a_zero_metric would score 0.998, not 1.
     solver.options["nopresol"] = ""
 
+    # STEP 4: bisect θ (see the trace for plan A in the module docstring).
+    #
     # θ = 1 always works: the blend is the plan itself. So `high` is always
-    # a θ with a blend, and `low` is a θ with none (or the floor).
+    # a θ with a blend, and `low` is a θ with none (or the floor). The
+    # answer is always between them, and each loop halves the gap.
     low = THETA_FLOOR
     high = 1.0
 
     while high - low > TOLERANCE:
+        # Try the middle of the range.
         theta = (low + high) / 2
         model.theta = theta
 
         # We read the solver's report, not the solution, so skip loading it.
+        # We need to know IF a blend exists, not which blend it is.
         report = solver.solve(model, load_solutions=False)
 
         condition = report.solver.termination_condition
 
+        # Three cases: yes (a blend exists), no (none exists), or broken.
         if check_optimal_termination(report):
             high = theta  # a blend exists, so try a smaller θ
         elif report.solver.status == SolverStatus.ok and condition in NO_BLEND:
@@ -252,22 +272,5 @@ def calculate_radial_efficiency(higher_metrics, lower_metrics, current_row):
                 f"Plan {current_row} did not solve at theta={theta}: {condition}"
             )
 
+    # `high` is the smallest θ we saw a blend for, so it is the score.
     return high
-
-
-def _make_dict(df):
-    """Turn a DataFrame into a dict that maps (row, col) to its value.
-
-    Both numbers start at 1, to match the model's RangeSets:
-
-        0.40,0.70        {(1, 1): 0.40, (1, 2): 0.70,   # plan 1
-        0.50,0.60   ->    (2, 1): 0.50, (2, 2): 0.60,   # plan 2
-        0.45,0.80         (3, 1): 0.45, (3, 2): 0.80}   # plan 3
-    """
-    # a plain NumPy array - reading one cell is much faster than df.iloc
-    values = df.to_numpy()
-    (M, N) = values.shape  # rows, columns
-
-    return {
-        (row + 1, col + 1): values[row, col] for row in range(M) for col in range(N)
-    }

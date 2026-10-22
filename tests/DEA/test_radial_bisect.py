@@ -1,9 +1,10 @@
 import math
 
 import pandas as pd
-from pytest import approx, raises
+from pytest import approx, mark, raises
 
-from redistricting.DEA.radial_bisect import calculate_radial_efficiency, radial_scores
+from redistricting.DEA import dea
+from redistricting.DEA.radial_bisect import calculate_radial_efficiency
 
 # The search stops when its range is 0.0001 wide, and it returns the top of
 # that range. So a score can sit up to 0.0001 above the exact answer.
@@ -17,9 +18,16 @@ mock_metrics = pd.DataFrame(
 
 mock_direction = {"compactness": "higher", "county_splits": "lower"}
 
+# DEA's own checks (directions, index, at least one metric) are tested in
+# test_dea.py. These tests cover the radial math and value rules.
 
-def test_radial_scores():
-    scores = radial_scores(mock_metrics, mock_direction)
+
+def radial(metrics, direction=mock_direction):
+    return dea.score(metrics, direction, "radial")
+
+
+def test_radial():
+    scores = radial(mock_metrics)
 
     # A: B has 0.50 compactness (0.40 / 0.8) and 6 splits (below 10 * 0.8)
     assert scores["A"] == approx(0.8, abs=TOLERANCE)
@@ -29,83 +37,81 @@ def test_radial_scores():
     assert scores["C"] == approx(1)
 
 
-def test_radial_scores_blend_of_plans():
+def test_radial_blend_of_plans():
     # D has no single plan to copy. A 1/3 : 2/3 blend of P1 and P2 gives
     # 3 compactness (2 / (2/3)) and 3 splits (4.5 * 2/3), so D scores 2/3.
     metrics = pd.DataFrame({"compactness": [1, 4, 2], "county_splits": [1, 4, 4.5]})
 
-    scores = radial_scores(metrics, mock_direction)
+    scores = radial(metrics)
 
     assert list(scores) == approx([1, 1, 2 / 3], abs=TOLERANCE)
 
 
-def test_radial_scores_keeps_index():
-    scores = radial_scores(mock_metrics.reset_index(drop=True), mock_direction)
-
-    assert list(scores.index) == [0, 1, 2]
-
-
-def test_radial_scores_higher_only():
-    scores = radial_scores(mock_metrics[["compactness"]], {"compactness": "higher"})
+def test_radial_higher_only():
+    scores = radial(mock_metrics[["compactness"]], {"compactness": "higher"})
 
     assert list(scores) == approx([0.8, 1, 1], abs=TOLERANCE)  # A: 0.40 / 0.50
 
 
-def test_radial_scores_lower_only():
-    scores = radial_scores(mock_metrics[["county_splits"]], {"county_splits": "lower"})
+def test_radial_lower_only():
+    scores = radial(mock_metrics[["county_splits"]], {"county_splits": "lower"})
 
     assert list(scores) == approx([0.6, 1, 0.75], abs=TOLERANCE)  # 6/10, 6/6, 6/8
 
 
-def test_radial_scores_allows_zero():
-    # Unlike SBM, radial can score a plan with a 0 (here: 0 county splits).
+def test_radial_allows_a_zero_metric():
+    # Unlike SBM, radial can score a plan with a 0 (here: 0 county splits),
+    # as long as the plan has another value above 0. See the next tests.
     # This also guards the PRESOLVE option in radial_bisect.py. With GLPK
     # presolve on, and "other" accepted as "no blend", the 1st plan scores
     # 0.998 instead of 1.
     metrics = pd.DataFrame({"compactness": [0.50, 0.40], "county_splits": [0, 4]})
 
-    scores = radial_scores(metrics, mock_direction)
+    scores = radial(metrics)
 
     assert list(scores) == approx([1, 0.8], abs=TOLERANCE)  # 2nd: 0.40 / 0.50
 
 
-def test_radial_scores_missing_direction_raises():
-    with raises(ValueError, match="county_splits"):
-        radial_scores(mock_metrics, {"compactness": "higher"})
+ALL_ZERO_REASON = "Known limitation: all-zero plan scores THETA_FLOOR"
 
 
-def test_radial_scores_unknown_metric_raises():
-    with raises(ValueError, match="reock"):
-        radial_scores(mock_metrics, {**mock_direction, "reock": "higher"})
+@mark.xfail(strict=True, reason=ALL_ZERO_REASON)
+def test_radial_all_zero_lower_plan_scores_one():
+    # 0 splits is the best possible, so nothing beats the 1st plan
+    metrics = pd.DataFrame({"county_splits": [0, 4]})
+
+    scores = radial(metrics, {"county_splits": "lower"})
+
+    assert scores[0] == approx(1)
 
 
-def test_radial_scores_invalid_direction_raises():
-    with raises(ValueError, match="good"):
-        radial_scores(mock_metrics, {**mock_direction, "compactness": "good"})
+@mark.xfail(strict=True, reason=ALL_ZERO_REASON)
+def test_radial_all_zero_mixed_plan_scores_one():
+    # the 2nd plan has more compactness but more splits, so neither wins
+    metrics = pd.DataFrame({"compactness": [0, 0.5], "county_splits": [0, 4]})
+
+    scores = radial(metrics)
+
+    assert scores[0] == approx(1)
 
 
-def test_radial_scores_no_metrics_raises():
-    with raises(ValueError, match="at least one metric"):
-        radial_scores(mock_metrics[[]], {})
-
-
-def test_radial_scores_nan_raises():
+def test_radial_nan_raises():
     metrics = mock_metrics.copy()
     metrics.loc["B", "county_splits"] = math.nan
 
     with raises(ValueError, match="0 or greater"):
-        radial_scores(metrics, mock_direction)
+        radial(metrics)
 
 
-def test_radial_scores_negative_raises():
+def test_radial_negative_raises():
     metrics = mock_metrics.copy()
     metrics.loc["B", "county_splits"] = -6
 
     with raises(ValueError, match="0 or greater"):
-        radial_scores(metrics, mock_direction)
+        radial(metrics)
 
 
-def test_higher_lower_rows_mismatch():
+def test_calculate_radial_efficiency_rows_mismatch():
     higher = pd.DataFrame([0.40, 0.50])
     lower = pd.DataFrame([10, 6, 8])
 

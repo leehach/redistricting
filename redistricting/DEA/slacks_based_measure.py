@@ -43,53 +43,8 @@ from pyomo.environ import (
     value,
 )
 from pyomo.opt import SolverFactory
-import pandas as pd
 
-DIRECTIONS = {"higher", "lower"}
-
-
-def score_plans(metrics: pd.DataFrame, direction: dict[str, str]) -> pd.Series:
-    """Return the SBM score of each plan (row) in `metrics`.
-
-    `metrics` has one row per plan and one column per metric. `direction`
-    maps every column to "higher" (higher is better) or "lower" (lower is
-    better). The result has the same index as `metrics`.
-    """
-    missing = set(metrics.columns) - set(direction)
-    if missing:
-        raise ValueError(f"No direction given for metrics: {sorted(missing)}")
-
-    unknown = set(direction) - set(metrics.columns)
-    if unknown:
-        raise ValueError(f"Direction given for unknown metrics: {sorted(unknown)}")
-
-    invalid = set(direction.values()) - DIRECTIONS
-    if invalid:
-        raise ValueError(
-            f"Direction must be 'higher' or 'lower', got: {sorted(invalid)}"
-        )
-
-    higher = [name for name in metrics.columns if direction[name] == "higher"]
-    lower = [name for name in metrics.columns if direction[name] == "lower"]
-
-    # with no "higher" metric, the model caps every score at 0
-    if not higher:
-        raise ValueError("At least one metric must have direction 'higher'")
-
-    # `> 0` is False for NaN, so this also catches blank cells
-    all_valid = (metrics > 0).to_numpy().all()
-    if not all_valid:
-        raise ValueError("All metric values must be greater than 0")
-
-    higher_metrics = metrics[higher]
-    lower_metrics = metrics[lower]
-
-    scores = [
-        calculate_efficiency(higher_metrics, lower_metrics, row)
-        for row in range(1, len(metrics) + 1)
-    ]
-
-    return pd.Series(scores, index=metrics.index, name="sbm_score")
+from redistricting.DEA.pyomo_data import make_dict
 
 
 def calculate_efficiency(higher_metrics, lower_metrics, current_row):
@@ -98,10 +53,11 @@ def calculate_efficiency(higher_metrics, lower_metrics, current_row):
     `higher_metrics` and `lower_metrics` have one row per plan, in the same
     order. Their columns are the higher-is-better and lower-is-better
     metrics. `current_row` is the plan to score, counted from 1 (`iHat` in
-    the original code). score_plans calls this once per row.
+    the original code). dea.score calls this once per plan.
 
-    Raises ValueError for mismatched rows or values of 0 or less, and
-    RuntimeError if the solver does not reach an optimal solution.
+    Raises ValueError for mismatched rows, no higher metric, or values of
+    0 or less, and RuntimeError if the solver does not reach an optimal
+    solution.
     """
     (plan_count, higher_col_count) = higher_metrics.shape
     (lower_plan_count, lower_col_count) = lower_metrics.shape
@@ -109,8 +65,14 @@ def calculate_efficiency(higher_metrics, lower_metrics, current_row):
     if plan_count != lower_plan_count:
         raise ValueError("Number of rows in higher and lower metrics are not equal!")
 
-    higher_dict = _make_dict(higher_metrics)
-    lower_dict = _make_dict(lower_metrics)
+    # with no higher-is-better metric, the model caps every score at 0
+    if higher_col_count == 0:
+        raise ValueError(
+            "higher_metrics needs at least one column (a higher-is-better metric)"
+        )
+
+    higher_dict = make_dict(higher_metrics)
+    lower_dict = make_dict(lower_metrics)
 
     # a 0 turns a floor constraint into `score <= 0`, which breaks DEA
     # `> 0` is False for NaN, so this also catches blank cells
@@ -235,26 +197,3 @@ def calculate_efficiency(higher_metrics, lower_metrics, current_row):
         )
 
     return value(model.obj)
-
-
-def _make_dict(df):
-    """Turn a DataFrame into a dict that maps (row, col) to its value.
-
-    Both numbers start at 1, to match the model's RangeSets:
-
-        0.40,0.70        {(1, 1): 0.40, (1, 2): 0.70,   # plan 1
-        0.50,0.60   ->    (2, 1): 0.50, (2, 2): 0.60,   # plan 2
-        0.45,0.80         (3, 1): 0.45, (3, 2): 0.80}   # plan 3
-
-    Pyomo can read some data straight from a DataFrame, so we may not
-    need this.
-    """
-    # a plain NumPy array - reading one cell is much faster than df.iloc
-    values = df.to_numpy()
-    (M, N) = values.shape  # rows, columns
-
-    return {
-        (row + 1, col + 1): values[row, col]
-        for row in range(M)
-        for col in range(N)
-    }
