@@ -66,11 +66,11 @@ def test_score_plans_nan_raises():
         score_plans(metrics, mock_direction)
 
 
-def test_good_bad_rows_mismatch():
+def test_calculate_efficiency_rows_mismatch():
     with raises(ValueError, match="Number of rows in good and bad plans are not equal!"):
         calculate_efficiency(pd.DataFrame([0.40, 0.50]), mock_bad_plans, 1)
 
-def test_zero_value_raises():
+def test_calculate_efficiency_zero_raises():
     bad_with_zero = pd.DataFrame([10, 0, 8])
 
     with raises(ValueError):
@@ -81,7 +81,7 @@ def test_zero_value_raises():
     with raises(ValueError):
         calculate_efficiency(good_with_zero, mock_bad_plans, 1)
 
-def test_lt_zero_value_raises():
+def test_calculate_efficiency_negative_raises():
     bad_with_lt_zero = pd.DataFrame([10, -0.1, 8])
 
     with raises(ValueError):

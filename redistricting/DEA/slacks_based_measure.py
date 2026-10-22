@@ -119,33 +119,33 @@ def calculate_efficiency(good_plans, bad_plans, current_row):
 
     # An AbstractModel is a template: declare the parts now, and Pyomo
     # builds them later in create_instance.
-    DEA_model = AbstractModel()
+    dea_model = AbstractModel()
 
     # S in the SBM math: the number of good metrics plus bad metrics
     total_metrics = good_plan_num_cols + bad_plan_number_cols
 
     # Sets (index ranges), counted from 1. The attribute names are ours to
     # choose; Pyomo finds each part by its type (RangeSet, Var, ...).
-    DEA_model.good_cols = RangeSet(1, good_plan_num_cols)  # good metrics
-    DEA_model.bad_cols = RangeSet(1, bad_plan_number_cols)  # bad metrics
+    dea_model.good_cols = RangeSet(1, good_plan_num_cols)  # good metrics
+    dea_model.bad_cols = RangeSet(1, bad_plan_number_cols)  # bad metrics
 
     # one index per plan (row) - good and bad have the same rows, checked above
-    DEA_model.plans = RangeSet(1, good_plan_num_rows)
+    dea_model.plans = RangeSet(1, good_plan_num_rows)
 
     # Variables are the numbers the solver picks to get the best objective
     # while keeping every constraint. Var(some_set) makes one per item in
     # the set (indexed); Var() makes just one.
-    DEA_model.good_weights = Var(DEA_model.good_cols)  # one weight per metric
-    DEA_model.bad_weights = Var(DEA_model.bad_cols)  # one weight per metric
-    DEA_model.baseline = Var()  # v, the bar - see principal_constraint
-    DEA_model.efficiency_score = Var()  # the SBM score
+    dea_model.good_weights = Var(dea_model.good_cols)  # one weight per metric
+    dea_model.bad_weights = Var(dea_model.bad_cols)  # one weight per metric
+    dea_model.baseline = Var()  # v, the bar - see principal_constraint
+    dea_model.efficiency_score = Var()  # the SBM score
 
     # A "rule" is a function that returns an expression. Pyomo calls it to
     # build an Objective or a Constraint. This one says: maximize the score.
     def obj_rule(model):
         return model.efficiency_score
 
-    DEA_model.obj = Objective(rule=obj_rule, sense=maximize)
+    dea_model.obj = Objective(rule=obj_rule, sense=maximize)
 
     # For the scored plan only: score = 1 + G - B - v, where G and B are
     # the plan's metrics times their weights. The solver picks the weights.
@@ -165,7 +165,7 @@ def calculate_efficiency(good_plans, bad_plans, current_row):
             == 1.0
         )
 
-    DEA_model.efficiency_constraint = Constraint(rule=efficiency_constraint_rule)
+    dea_model.efficiency_constraint = Constraint(rule=efficiency_constraint_rule)
 
     # The core ("principal") constraint: with the same weights, no plan's
     # G - B can go above the bar v. Indexed by `plans`, so Pyomo makes one
@@ -184,13 +184,13 @@ def calculate_efficiency(good_plans, bad_plans, current_row):
             <= 0.0
         )
 
-    DEA_model.principal_constraint = Constraint(
-        DEA_model.plans, rule=principal_constraint_rule
+    dea_model.principal_constraint = Constraint(
+        dea_model.plans, rule=principal_constraint_rule
     )
 
     # The bar v cannot go below 1. A single constraint can take `expr=`
     # directly instead of a rule (efficiency_constraint could too).
-    DEA_model.baseline_constraint = Constraint(expr=DEA_model.baseline >= 1.0)
+    dea_model.baseline_constraint = Constraint(expr=dea_model.baseline >= 1.0)
 
     # Floors: S * value * weight >= score, so each metric adds at least
     # score / S. While the score is above 0, no weight can be 0, so the
@@ -203,8 +203,8 @@ def calculate_efficiency(good_plans, bad_plans, current_row):
             total_metrics * good_plans_dict[current_row, metric]
         ) * model.good_weights[metric] - model.efficiency_score >= 0.0
 
-    DEA_model.good_floor_constraint = Constraint(
-        DEA_model.good_cols, rule=good_floor_constraint_rule
+    dea_model.good_floor_constraint = Constraint(
+        dea_model.good_cols, rule=good_floor_constraint_rule
     )
 
     def bad_floor_constraint_rule(model, metric):
@@ -212,25 +212,25 @@ def calculate_efficiency(good_plans, bad_plans, current_row):
             total_metrics * bad_plans_dict[current_row, metric]
         ) * model.bad_weights[metric] - model.efficiency_score >= 0.0
 
-    DEA_model.bad_floor_constraint = Constraint(
-        DEA_model.bad_cols, rule=bad_floor_constraint_rule
+    dea_model.bad_floor_constraint = Constraint(
+        dea_model.bad_cols, rule=bad_floor_constraint_rule
     )
 
     # build a concrete, solvable model from the template
-    model = DEA_model.create_instance()
+    model = dea_model.create_instance()
 
     # GLPK (GNU Linear Programming Kit) is a free, open-source solver, so it
     # needs no license. It installs from conda-forge (see environment.yml).
-    Opt = SolverFactory("glpk")
+    opt = SolverFactory("glpk")
 
     # solve, and get a report back (status, termination condition, ...)
-    Soln = Opt.solve(model)
+    solution = opt.solve(model)
 
     # a valid model always solves to optimal, so anything else means
     # the model or the solver is broken - stop instead of writing a fake score
-    if not check_optimal_termination(Soln):
+    if not check_optimal_termination(solution):
         raise RuntimeError(
-            f"Plan {current_row} did not solve: {Soln.solver.termination_condition}"
+            f"Plan {current_row} did not solve: {solution.solver.termination_condition}"
         )
 
     return value(model.obj)
