@@ -68,7 +68,7 @@ def _prepare_df(df):
     df = df.drop(columns="geometry", errors="ignore")
 
     for col in ["dem", "rep"]:
-        df[col] = df[col].fillna(0).astype(float)
+        df[col] = pd.to_numeric(df[col]).fillna(0).astype(float)
     # two-party total: denominator is dem + rep, not all votes cast
     df["total"] = df["dem"] + df["rep"]
     df["cell_id"] = df["cell_id"].astype(str)
@@ -92,14 +92,13 @@ def _district_totals(df, plan):
     # groupby skips blank districts, so say how many precincts that leaves out
     missing = int(plan_df["district"].isna().sum())
     if missing:
-        warnings.warn(f"{plan}: {missing} precincts have no district and are "
-                      f"left out of the metric")
-    totals =plan_df.groupby("district", as_index=False)[["dem", "rep", "total"]].sum()
+        warnings.warn(f"{plan}: left out {missing} precinct(s) with no district")
+    totals = plan_df.groupby("district", as_index=False)[["dem", "rep", "total"]].sum()
 
     empty = totals.loc[totals["total"] == 0, "district"].astype(str).tolist()
     if empty:
-        warnings.warn(f"{plan}: {len(empty)} districts have no votes and "
-                      f"are left out of the metric: {', '.join(empty)}")
+        warnings.warn(f"{plan}: left out {len(empty)} district(s) with no votes: "
+                      f"{', '.join(empty)}")
     return totals[totals["total"] > 0]
 
 
