@@ -6,7 +6,10 @@ dependencies:
   - pyomo
   - pandas
   - glpk
+  - pytest
+  - pysal
+  - shapely
+  - geopandas
   # required
   # optional, testing, etc.
   # docs
-
