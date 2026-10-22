@@ -3,12 +3,13 @@ channels:
   - conda-forge
 dependencies:
   - python
-  - pytest
+  # required
+  - pyomo
+  - pandas
+  - glpk
   - pysal
   - shapely
   - geopandas
-  - pandas
-  # required
   # optional, testing, etc.
+  - pytest
   # docs
-
