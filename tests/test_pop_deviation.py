@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pop_deviation import population_deviation
+from redistricting.pop_deviation import population_deviation
 
 
 @pytest.fixture
