@@ -1,4 +1,4 @@
-"""Show the SBM frontier app for 60 made-up plans.
+"""Show the DEA frontier app for 60 made-up plans.
 
 mock_plans.csv has one row per plan and four metrics. Each plan puts its
 effort on some metrics at the cost of the others, so every pair of
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from redistricting.dea_frontier_app import add_sbm_scores, create_app
+from redistricting.dea_frontier_app import add_dea_scores, create_app
 
 plans = pd.read_csv(Path(__file__).parent / "mock_plans.csv")
 
@@ -31,6 +31,6 @@ labels = {
     "partisan_gap": "Partisan Gap",
 }
 
-results = add_sbm_scores(plans, direction)
+results = add_dea_scores(plans, direction)
 app = create_app(results, direction, "plan_id", labels)
 app.run()

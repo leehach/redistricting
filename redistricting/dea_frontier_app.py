@@ -1,18 +1,18 @@
 """
-Interactive Pareto-frontier explorer for SBM DEA results of redistricting plans.
+Interactive Pareto-frontier explorer for DEA results of redistricting plans.
 
 A Dash app that scores plans with redistricting.DEA.slacks_based_measure:
 
   * a scatter plot of any two metrics, with every axis oriented so that
     up and right are better
   * for just the two metrics on the axes: the Pareto frontier plans as
-    dark points joined by a dashed line, and its convex hull from SBM as
+    dark points joined by a dashed line, and its convex hull as
     a solid line, as in Gopalan et al. 2026, Figure 2
-  * a red x on each plan with SBM score 1 on all metrics
-  * optionally, the n plans closest to that frontier (highest SBM scores
+  * a red x on each plan with DEA score 1 on all metrics
+  * optionally, the n plans closest to that frontier (highest DEA scores
     among the other plans) in blue, with a slider for n
   * click any plan to see its metrics, its percentile on each one, and
-    its SBM score
+    its DEA score
 
 Note: a red x uses ALL metrics at once, so it can sit far from the
 2-metric lines. That's expected: it earns its place on the frontier with
@@ -20,7 +20,7 @@ a metric that isn't on the current axes.
 
 Usage (see examples/frontier_app/mock_plans_app.py):
 
-    results = add_sbm_scores(plans, direction)
+    results = add_dea_scores(plans, direction)
     app = create_app(results, direction, id_col)
     app.run()
 
@@ -43,21 +43,21 @@ TOL = 1e-6
 # --------------------------------------------------------------------------
 # Scoring
 # --------------------------------------------------------------------------
-def add_sbm_scores(df: pd.DataFrame, direction: dict[str, str]) -> pd.DataFrame:
-    """Return a copy of df with SBM_Score and On_Frontier columns.
+def add_dea_scores(df: pd.DataFrame, direction: dict[str, str]) -> pd.DataFrame:
+    """Return a copy of df with DEA_Score and On_Frontier columns.
 
-    SBM_Score comes from score_plans over the columns named in `direction`.
+    DEA_Score comes from score_plans over the columns named in `direction`.
     On_Frontier is True when the score is 1.
     """
     results = df.copy()
-    results["SBM_Score"] = score_plans(df[list(direction)], direction)
-    results["On_Frontier"] = results["SBM_Score"] >= 1 - TOL
+    results["DEA_Score"] = score_plans(df[list(direction)], direction)
+    results["On_Frontier"] = results["DEA_Score"] >= 1 - TOL
     return results
 
 
-def sbm_hull_2d(results: pd.DataFrame, x: str, y: str,
-                direction: dict[str, str]) -> pd.DataFrame:
-    """Plans with SBM score 1 for just metrics x and y, sorted by x.
+def convex_hull_2d(results: pd.DataFrame, x: str, y: str,
+                   direction: dict[str, str]) -> pd.DataFrame:
+    """Plans with DEA score 1 for just metrics x and y, sorted by x.
 
     These are the corners of the convex hull of the Pareto frontier
     (Gopalan et al. 2026, Figure 2, solid line).
@@ -114,8 +114,8 @@ FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
 # Data helpers
 # --------------------------------------------------------------------------
 def near_frontier(results: pd.DataFrame, n: int) -> pd.DataFrame:
-    """The n plans off the frontier with the highest SBM scores."""
-    return results[~results["On_Frontier"]].nlargest(n, "SBM_Score")
+    """The n plans off the frontier with the highest DEA scores."""
+    return results[~results["On_Frontier"]].nlargest(n, "DEA_Score")
 
 
 def fmt(v: float) -> str:
@@ -131,7 +131,7 @@ def build_figure(results, direction, names, id_col, x, y, n,
 
     `pareto` is pareto_2d() output: its plans are the bold points, and
     show_pareto adds the dashed line through them. `hull` is
-    sbm_hull_2d() output for the solid line. Pass None to leave either out.
+    convex_hull_2d() output for the solid line. Pass None to leave either out.
     """
     eff = results[results["On_Frontier"]]
     near = near_frontier(results, n)
@@ -140,14 +140,14 @@ def build_figure(results, direction, names, id_col, x, y, n,
     nx, ny = names.get(x, x), names.get(y, y)
 
     hover = ("<b>%{customdata[0]}</b><br>" + nx + ": %{x}<br>" + ny + ": %{y}"
-             "<br>SBM score: %{customdata[1]:.3f}<extra></extra>")
+             "<br>DEA score: %{customdata[1]:.3f}<extra></extra>")
 
     def scatter(df, name, color, size, symbol, opacity, outline=1.5):
         return go.Scatter(
             x=df[x], y=df[y], mode="markers", name=name,
             marker=dict(color=color, size=size, symbol=symbol, opacity=opacity,
                         line=dict(color="white", width=outline)),
-            customdata=df[[id_col, "SBM_Score"]].astype(object).to_numpy(),
+            customdata=df[[id_col, "DEA_Score"]].astype(object).to_numpy(),
             hovertemplate=hover,
         )
 
@@ -169,13 +169,13 @@ def build_figure(results, direction, names, id_col, x, y, n,
         fig.add_trace(go.Scatter(
             x=hull[x], y=hull[y], mode="lines",
             line=dict(color=INK, width=2),
-            name=f"Convex hull (SBM), these 2 metrics ({len(hull)})",
+            name=f"Convex hull, these 2 metrics ({len(hull)})",
             hoverinfo="skip"))
 
     if pareto is not None:
         fig.add_trace(scatter(pareto, f"Frontier for these 2 metrics ({len(pareto)})",
                               INK, 12, "circle", 1))
-    fig.add_trace(scatter(eff, f"Score 1 on all {len(direction)} metrics ({len(eff)})",
+    fig.add_trace(scatter(eff, f"DEA score 1 on all {len(direction)} metrics ({len(eff)})",
                           FRONTIER, 8, "x", 1, outline=0))
 
     if selected is not None:
@@ -236,7 +236,7 @@ def plan_panel(results, direction, names, id_col, plan_id):
             "background": color, "color": "white",
             "borderRadius": "10px", "padding": "2px 10px", "fontSize": "12px",
             "verticalAlign": "middle"}),
-        html.Div(f"SBM score {row['SBM_Score']:.3f}",
+        html.Div(f"DEA score {row['DEA_Score']:.3f}",
                  style={"color": MUTED, "marginTop": "6px"}),
     ], style={"marginBottom": "16px"})
 
@@ -272,28 +272,28 @@ def create_app(
     id_col: str,
     labels: dict[str, str] | None = None,
     n_default: int = 0,
-    title: str = "SBM Frontier of Prospective Redistricting Plans",
+    title: str = "DEA Frontier of Prospective Redistricting Plans",
 ) -> Dash:
-    """Build the Dash app from add_sbm_scores() output."""
+    """Build the Dash app from add_dea_scores() output."""
     names = labels or {}
     results = results.reset_index(drop=True)
     cols = list(direction)
     n_off = int((~results["On_Frontier"]).sum())
     n_default = min(n_default, n_off)
     n_eff = int(results["On_Frontier"].sum())
-    hulls: dict[frozenset[str], pd.DataFrame] = {}  # axis pair -> sbm_hull_2d()
+    hulls: dict[frozenset[str], pd.DataFrame] = {}  # axis pair -> convex_hull_2d()
 
     options = [{"label": names.get(c, c), "value": c} for c in cols]
     label = {"fontSize": "12px", "color": MUTED, "marginBottom": "4px", "display": "block"}
 
-    app = Dash(__name__, title="SBM Frontier")
+    app = Dash(__name__, title="DEA Frontier")
     app.layout = html.Div([
         html.H2(title, style={"margin": "0 0 4px"}),
         html.P("Axes are flipped where needed so up and right are always better. "
                "Dark points: the frontier for the two metrics shown (no plan "
                "beats them on both), joined by the dashed line. Solid line: "
                "its convex hull. "
-               f"Red x: the {n_eff} of {len(results)} plans with SBM score 1 "
+               f"Red x: the {n_eff} of {len(results)} plans with DEA score 1 "
                f"on all {len(cols)} metrics. An x can sit far from the lines, "
                "because it is on the frontier through a metric not shown.",
                style={"color": MUTED, "margin": "0 0 16px", "maxWidth": "900px"}),
@@ -317,7 +317,7 @@ def create_app(
                      style={"width": "260px"}),
             dcc.Checklist(id="toggles",
                           options=[{"label": " Show other plans", "value": "others"},
-                                   {"label": " Show convex hull (SBM)", "value": "hull"},
+                                   {"label": " Show convex hull", "value": "hull"},
                                    {"label": " Show Pareto frontier", "value": "pareto"}],
                           value=["others", "hull", "pareto"],
                           style={"fontSize": "14px"},
@@ -352,7 +352,7 @@ def create_app(
             # one GLPK solve per plan, so score each axis pair only once
             pair = frozenset((x, y))
             if pair not in hulls:
-                hulls[pair] = sbm_hull_2d(results, x, y, direction)
+                hulls[pair] = convex_hull_2d(results, x, y, direction)
             hull = hulls[pair].sort_values([x, y])
         return build_figure(results, direction, names, id_col, x, y, n or 0,
                             "others" in toggles, pareto, "pareto" in toggles,
