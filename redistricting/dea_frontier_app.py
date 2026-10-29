@@ -152,6 +152,7 @@ def near_frontier(results: pd.DataFrame, n: int) -> pd.DataFrame:
 
 
 def fmt(v: float) -> str:
+    """Format a metric value: whole numbers with commas, else 4 digits."""
     return f"{v:,.0f}" if float(v).is_integer() and abs(v) >= 1 else f"{v:.4g}"
 
 
@@ -168,6 +169,9 @@ def build_figure(results, direction, names, id_col, x, y, n,
     """
     eff = results[results["On_Frontier"]]
     near = near_frontier(results, n)
+
+    # The near and Pareto plans get their own traces, so leave them out of
+    # the gray ones. The red x plans stay in: the x is drawn on top.
     front_index = pareto.index if pareto is not None else pd.Index([])
     others = results.drop(index=near.index.union(front_index))
     nx, ny = names.get(x, x), names.get(y, y)
@@ -175,6 +179,10 @@ def build_figure(results, direction, names, id_col, x, y, n,
     hover = ("<b>%{customdata[0]}</b><br>" + nx + ": %{x}<br>" + ny + ": %{y}"
              "<br>DEA score: %{customdata[1]:.3f}<extra></extra>")
 
+    # customdata carries the plan ID and score with each point, for the
+    # hover text and for _select. astype(object) keeps each value's own
+    # type: without it, numpy turns an int ID 17 into 17.0 to match the
+    # float score, and "17.0" would not match the ID "17" on a click.
     def scatter(df, name, color, size, symbol, opacity, outline=1.5):
         return go.Scatter(
             x=df[x], y=df[y], mode="markers", name=name,
@@ -208,6 +216,8 @@ def build_figure(results, direction, names, id_col, x, y, n,
     fig.add_trace(scatter(eff, f"DEA frontier, all {len(direction)} metrics ({len(eff)})",
                           FRONTIER, 8, "x", 1, outline=0))
 
+    # Ring and label the clicked plan. _select stores the ID as a string,
+    # so compare against the IDs as strings.
     if selected is not None:
         sel = results[results[id_col].astype(str) == selected]
         if len(sel):
@@ -246,6 +256,7 @@ def build_figure(results, direction, names, id_col, x, y, n,
 # Side panel
 # --------------------------------------------------------------------------
 def plan_panel(results, direction, names, id_col, plan_id):
+    """Return the side panel for one plan, or a hint when none is picked."""
     if plan_id is None:
         return html.Div([
             html.H3("Click a plan", style={"margin": "0 0 8px"}),
@@ -270,7 +281,8 @@ def plan_panel(results, direction, names, id_col, plan_id):
                  style={"color": MUTED, "marginTop": "6px"}),
     ], style={"marginBottom": "16px"})
 
-    # Metric rows: value and percentile bar
+    # Metric rows: value and percentile bar. The percentile is the share of
+    # plans this one ties or beats, so the best plan gets 100%.
     rows = []
     for col, way in direction.items():
         v = float(row[col])
@@ -316,6 +328,8 @@ def create_app(
     The axes, the slider, the intro text, and the side panel all follow
     the chosen dataset, since datasets can have different metrics.
     """
+    # Give each dataset a clean 0..n-1 index. build_figure finds plans by
+    # index label (drop, union), so the labels must be unique.
     datasets = {name: Dataset(data.results.reset_index(drop=True), data.direction,
                               data.id_col, data.labels)
                 for name, data in datasets.items()}
@@ -363,10 +377,16 @@ def create_app(
                 "padding": "16px", "alignSelf": "flex-start", "minWidth": "0"}),
         ], style={"display": "flex", "gap": "16px", "flexWrap": "wrap"}),
 
+        # The ID of the clicked plan. The figure and the panel both read it.
         dcc.Store(id="selected"),
     ], style={"fontFamily": FONT, "color": INK, "padding": "20px 24px",
               "maxWidth": "1400px", "margin": "0 auto"})
 
+    # Each callback runs when any of its Inputs changes, and its return
+    # values go to its Outputs, in order.
+
+    # A new dataset: reset the axes to its first two metrics, size the
+    # slider to its plans off the frontier, and rewrite the intro.
     @app.callback(
         Output("x", "options"), Output("x", "value"),
         Output("y", "options"), Output("y", "value"),
@@ -379,6 +399,7 @@ def create_app(
         cols = list(data.direction)
         options = [{"label": data.labels.get(c, c), "value": c} for c in cols]
         n_off = int((~data.results["On_Frontier"]).sum())
+        # max(n_off, 1) keeps the slider's max above its min of 0.
         return (options, cols[0], options, cols[1] if len(cols) > 1 else cols[0],
                 max(n_off, 1), {0: "0", n_off: str(n_off)}, min(n_default, n_off),
                 _intro(data))
@@ -394,6 +415,9 @@ def create_app(
         if x not in data.direction or y not in data.direction:
             return no_update
         toggles = toggles or []
+
+        # With x == y every plan sits on one diagonal line, so there is
+        # no 2-metric frontier to draw.
         hull = pareto = None
         if "pareto" in toggles and x != y:
             pareto = pareto_2d(data.results, x, y, data.direction)
@@ -414,6 +438,8 @@ def create_app(
         if not click:
             return no_update
         point = click["points"][0]
+        # The hull line and the selection ring have no customdata, so a
+        # click on them keeps the current selection.
         if "customdata" not in point:
             return no_update
         return str(point["customdata"][0])
