@@ -9,9 +9,15 @@ and both files list the same plans in the same order:
 This script names the columns good_1, good_2, ... and bad_1, bad_2, ...
 by the file they came from, numbers the plans from 0, and runs the app.
 
+Scoring 2,355 plans takes about 3.5 minutes, so the scores are cached in
+the user's temp folder. Later runs with the same data start in seconds.
+
 Run it from the repo root, then open http://127.0.0.1:8050:
     micromamba run -n redistricting python -m examples.frontier_app.class_plans_app
 """
+
+import tempfile
+from pathlib import Path
 
 import pandas as pd
 
@@ -34,6 +40,7 @@ plans.insert(0, "plan_id", range(len(plans)))
 direction = {name: "higher" for name in good.columns}
 direction |= {name: "lower" for name in bad.columns}
 
-results = add_dea_scores(plans, direction)
+cache_dir = Path(tempfile.gettempdir()) / "redistricting"
+results = add_dea_scores(plans, direction, cache_dir)
 app = create_app(results, direction, "plan_id")
 app.run()

@@ -1,5 +1,6 @@
 import pandas as pd
 
+from redistricting import dea_frontier_app
 from redistricting.dea_frontier_app import (
     add_dea_scores,
     convex_hull_2d,
@@ -20,6 +21,27 @@ direction = {"compactness": "higher", "county_splits": "lower"}
 def test_add_dea_scores_marks_frontier():
     results = add_dea_scores(plans, direction)
 
+    assert list(results["On_Frontier"]) == [False, True, False]
+
+
+def test_add_dea_scores_reads_cache(tmp_path, monkeypatch):
+    first = add_dea_scores(plans, direction, tmp_path)
+
+    # a second solve would fail, so this call must read the cache file
+    monkeypatch.setattr(dea_frontier_app, "score_plans", _fail_if_called)
+    second = add_dea_scores(plans, direction, tmp_path)
+
+    assert list(second["DEA_Score"]) == list(first["DEA_Score"])
+    assert len(list(tmp_path.glob("dea_scores_*.csv"))) == 1
+
+
+def test_add_dea_scores_cache_misses_on_new_data(tmp_path):
+    add_dea_scores(plans, direction, tmp_path)
+    changed = plans.assign(county_splits=[10, 6, 7])
+
+    results = add_dea_scores(changed, direction, tmp_path)
+
+    assert len(list(tmp_path.glob("dea_scores_*.csv"))) == 2
     assert list(results["On_Frontier"]) == [False, True, False]
 
 
@@ -85,3 +107,7 @@ def test_create_app():
     app = create_app(results, direction, "plan_id")
 
     assert app.layout is not None
+
+
+def _fail_if_called(*args):
+    raise AssertionError("score_plans ran instead of reading the cache")

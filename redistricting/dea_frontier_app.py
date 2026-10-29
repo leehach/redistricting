@@ -31,10 +31,15 @@ Usage (see examples/frontier_app/mock_plans_app.py):
 
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+
 import pandas as pd
 import plotly.graph_objects as go
 from dash import Dash, Input, Output, ctx, dcc, html, no_update
 
+from redistricting.DEA import slacks_based_measure
 from redistricting.DEA.slacks_based_measure import score_plans
 
 # GLPK returns 0.9999999... for some frontier plans.
@@ -44,14 +49,32 @@ TOL = 1e-6
 # --------------------------------------------------------------------------
 # Scoring
 # --------------------------------------------------------------------------
-def add_dea_scores(df: pd.DataFrame, direction: dict[str, str]) -> pd.DataFrame:
+def add_dea_scores(df: pd.DataFrame, direction: dict[str, str],
+                   cache_dir: str | Path | None = None) -> pd.DataFrame:
     """Return a copy of df with DEA_Score and On_Frontier columns.
 
     DEA_Score comes from score_plans over the columns named in `direction`.
     On_Frontier is True when the score is 1.
+
+    score_plans runs one solve per plan, which takes minutes for thousands
+    of plans. With `cache_dir`, the scores are saved there and read back on
+    the next call with the same metric values, directions, and DEA code.
     """
+    metrics = df[list(direction)]
+
+    if cache_dir is None:
+        scores = score_plans(metrics, direction).to_numpy()
+    else:
+        path = Path(cache_dir) / f"dea_scores_{_cache_key(metrics, direction)}.csv"
+        if path.exists():
+            scores = pd.read_csv(path)["DEA_Score"].to_numpy()
+        else:
+            scores = score_plans(metrics, direction).to_numpy()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame({"DEA_Score": scores}).to_csv(path, index=False)
+
     results = df.copy()
-    results["DEA_Score"] = score_plans(df[list(direction)], direction)
+    results["DEA_Score"] = scores
     results["On_Frontier"] = results["DEA_Score"] >= 1 - TOL
     return results
 
@@ -375,3 +398,20 @@ def create_app(
         return plan_panel(results, direction, names, id_col, selected)
 
     return app
+
+
+# --------------------------------------------------------------------------
+# Helpers
+# --------------------------------------------------------------------------
+def _cache_key(metrics: pd.DataFrame, direction: dict[str, str]) -> str:
+    """Return a short hash of everything that changes the DEA scores.
+
+    That is the metric values in row order, the column names, the
+    directions, and the source of the DEA code, so editing any of them
+    makes a new cache file instead of reading a stale one.
+    """
+    digest = hashlib.sha256()
+    digest.update(pd.util.hash_pandas_object(metrics, index=False).to_numpy().tobytes())
+    digest.update(json.dumps([list(metrics.columns), direction]).encode())
+    digest.update(Path(slacks_based_measure.__file__).read_bytes())
+    return digest.hexdigest()[:16]
