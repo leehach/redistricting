@@ -19,11 +19,13 @@ Note: a red x uses ALL metrics at once, so it can sit far from the
 2-metric lines. That's expected: it earns its place on the frontier with
 a metric that isn't on the current axes.
 
-Usage (see examples/frontier_app/mock_plans_app.py):
+Usage (see examples/frontier_app/app.py):
 
     results = add_dea_scores(plans, direction)
-    app = create_app(results, direction, id_col)
+    app = create_app({"My plans": Dataset(results, direction, id_col)})
     app.run()
+
+Pass more than one Dataset to switch between them with the "Data" dropdown.
 
 `plans` has one row per plan. `direction` maps each metric column to
 "higher" or "lower", the same as score_plans.
@@ -33,6 +35,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
@@ -293,53 +296,52 @@ def plan_panel(results, direction, names, id_col, plan_id):
 # --------------------------------------------------------------------------
 # App
 # --------------------------------------------------------------------------
+@dataclass
+class Dataset:
+    """One set of scored plans the app can show."""
+
+    results: pd.DataFrame        # add_dea_scores() output
+    direction: dict[str, str]    # metric column -> "higher" or "lower"
+    id_col: str                  # column that names each plan
+    labels: dict[str, str] = field(default_factory=dict)  # column -> label
+
+
 def create_app(
-    results: pd.DataFrame,
-    direction: dict[str, str],
-    id_col: str,
-    labels: dict[str, str] | None = None,
+    datasets: dict[str, Dataset],
     n_default: int = 0,
     title: str = "DEA Frontier of Prospective Redistricting Plans",
 ) -> Dash:
-    """Build the Dash app from add_dea_scores() output."""
-    names = labels or {}
-    results = results.reset_index(drop=True)
-    cols = list(direction)
-    n_off = int((~results["On_Frontier"]).sum())
-    n_default = min(n_default, n_off)
-    n_eff = int(results["On_Frontier"].sum())
+    """Build the Dash app. A "Data" dropdown picks a dataset by name.
 
-    options = [{"label": names.get(c, c), "value": c} for c in cols]
+    The axes, the slider, the intro text, and the side panel all follow
+    the chosen dataset, since datasets can have different metrics.
+    """
+    datasets = {name: Dataset(data.results.reset_index(drop=True), data.direction,
+                              data.id_col, data.labels)
+                for name, data in datasets.items()}
+    first = next(iter(datasets))
     label = {"fontSize": "12px", "color": MUTED, "marginBottom": "4px", "display": "block"}
 
     app = Dash(__name__, title="DEA Frontier")
     app.layout = html.Div([
         html.H2(title, style={"margin": "0 0 4px"}),
-        html.P("Axes are flipped where needed so up and right are always better. "
-               "Dark points on the dashed line: the Pareto frontier for the "
-               "two metrics shown (no plan beats them on both). Solid line: "
-               "its convex hull. "
-               f"Red x: the {n_eff} of {len(results)} plans on the DEA frontier, "
-               f"which uses all {len(cols)} metrics together. An x can sit "
-               "far from the lines, "
-               "because it is on the frontier through a metric not shown.",
-               style={"color": MUTED, "margin": "0 0 16px", "maxWidth": "900px"}),
+        html.P(id="intro", style={"color": MUTED, "margin": "0 0 16px", "maxWidth": "900px"}),
 
-        # Controls
+        # Controls. The axis options and the slider range are filled in by
+        # _choose_data, because they depend on the dataset.
         html.Div([
-            html.Div([html.Label("X axis", style=label),
-                      dcc.Dropdown(id="x", options=options, value=cols[0], clearable=False)],
-                     style={"width": "200px"}),
-            html.Div([html.Label("Y axis", style=label),
-                      dcc.Dropdown(id="y", options=options,
-                                   value=cols[1] if len(cols) > 1 else cols[0],
+            html.Div([html.Label("Data", style=label),
+                      dcc.Dropdown(id="data", options=list(datasets), value=first,
                                    clearable=False)],
                      style={"width": "200px"}),
+            html.Div([html.Label("X axis", style=label),
+                      dcc.Dropdown(id="x", clearable=False)],
+                     style={"width": "200px"}),
+            html.Div([html.Label("Y axis", style=label),
+                      dcc.Dropdown(id="y", clearable=False)],
+                     style={"width": "200px"}),
             html.Div([html.Label("Plans closest to frontier (n)", style=label),
-                      dcc.Slider(id="n", min=0, max=max(n_off, 1), step=1,
-                                 value=n_default,
-                                 marks={0: "0", n_default: str(n_default),
-                                        n_off: str(n_off)},
+                      dcc.Slider(id="n", min=0, max=1, step=1, value=0,
                                  tooltip={"placement": "bottom"})],
                      style={"width": "260px"}),
             dcc.Checklist(id="toggles",
@@ -366,36 +368,62 @@ def create_app(
               "maxWidth": "1400px", "margin": "0 auto"})
 
     @app.callback(
-        Output("graph", "figure"),
-        Input("x", "value"), Input("y", "value"), Input("n", "value"),
-        Input("toggles", "value"), Input("selected", "data"),
+        Output("x", "options"), Output("x", "value"),
+        Output("y", "options"), Output("y", "value"),
+        Output("n", "max"), Output("n", "marks"), Output("n", "value"),
+        Output("intro", "children"),
+        Input("data", "value"),
     )
-    def _update_figure(x, y, n, toggles, selected):
+    def _choose_data(name):
+        data = datasets[name]
+        cols = list(data.direction)
+        options = [{"label": data.labels.get(c, c), "value": c} for c in cols]
+        n_off = int((~data.results["On_Frontier"]).sum())
+        return (options, cols[0], options, cols[1] if len(cols) > 1 else cols[0],
+                max(n_off, 1), {0: "0", n_off: str(n_off)}, min(n_default, n_off),
+                _intro(data))
+
+    @app.callback(
+        Output("graph", "figure"),
+        Input("data", "value"), Input("x", "value"), Input("y", "value"),
+        Input("n", "value"), Input("toggles", "value"), Input("selected", "data"),
+    )
+    def _update_figure(name, x, y, n, toggles, selected):
+        data = datasets[name]
+        # while switching datasets, x and y can still name the old metrics
+        if x not in data.direction or y not in data.direction:
+            return no_update
         toggles = toggles or []
         hull = pareto = None
         if "pareto" in toggles and x != y:
-            pareto = pareto_2d(results, x, y, direction)
+            pareto = pareto_2d(data.results, x, y, data.direction)
         if "hull" in toggles and x != y:
-            hull = convex_hull_2d(results, x, y, direction)
-        return build_figure(results, direction, names, id_col, x, y, n or 0,
-                            "others" in toggles, pareto, hull, selected)
+            hull = convex_hull_2d(data.results, x, y, data.direction)
+        return build_figure(data.results, data.direction, data.labels, data.id_col,
+                            x, y, n or 0, "others" in toggles, pareto, hull, selected)
 
     @app.callback(
         Output("selected", "data"),
-        Input("graph", "clickData"),
+        Input("graph", "clickData"), Input("data", "value"),
         prevent_initial_call=True,
     )
-    def _select(click):
-        if ctx.triggered_id != "graph" or not click:
+    def _select(click, _name):
+        # a new dataset has different plans, so clear the selection
+        if ctx.triggered_id == "data":
+            return None
+        if not click:
             return no_update
         point = click["points"][0]
         if "customdata" not in point:
             return no_update
         return str(point["customdata"][0])
 
-    @app.callback(Output("panel", "children"), Input("selected", "data"))
-    def _update_panel(selected):
-        return plan_panel(results, direction, names, id_col, selected)
+    @app.callback(Output("panel", "children"),
+                  Input("selected", "data"), Input("data", "value"))
+    def _update_panel(selected, name):
+        data = datasets[name]
+        return plan_panel(data.results, data.direction, data.labels, data.id_col,
+                          selected)
 
     return app
 
@@ -403,6 +431,18 @@ def create_app(
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
+def _intro(data: Dataset) -> str:
+    """Return the text above the chart for one dataset."""
+    n_eff = int(data.results["On_Frontier"].sum())
+    return ("Axes are flipped where needed so up and right are always better. "
+            "Dark points on the dashed line: the Pareto frontier for the two "
+            "metrics shown (no plan beats them on both). Solid line: its convex "
+            f"hull. Red x: the {n_eff} of {len(data.results)} plans on the DEA "
+            f"frontier, which uses all {len(data.direction)} metrics together. "
+            "An x can sit far from the lines, because it is on the frontier "
+            "through a metric not shown.")
+
+
 def _cache_key(metrics: pd.DataFrame, direction: dict[str, str]) -> str:
     """Return a short hash of everything that changes the DEA scores.
 

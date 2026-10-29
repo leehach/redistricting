@@ -2,6 +2,7 @@ import pandas as pd
 
 from redistricting import dea_frontier_app
 from redistricting.dea_frontier_app import (
+    Dataset,
     add_dea_scores,
     convex_hull_2d,
     create_app,
@@ -104,9 +105,22 @@ def test_convex_hull_2d_drops_plans_off_the_hull():
 def test_create_app():
     results = add_dea_scores(plans, direction)
 
-    app = create_app(results, direction, "plan_id")
+    app = create_app({"A": Dataset(results, direction, "plan_id")})
 
     assert app.layout is not None
+
+
+def test_create_app_with_two_datasets():
+    first = Dataset(add_dea_scores(plans, direction), direction, "plan_id")
+    other_plans = pd.DataFrame({"plan_id": ["X", "Y"], "score": [0.3, 0.6]})
+    other_direction = {"score": "higher"}
+    second = Dataset(add_dea_scores(other_plans, other_direction),
+                     other_direction, "plan_id")
+
+    app = create_app({"First": first, "Second": second})
+
+    assert app.layout["data"].options == ["First", "Second"]
+    assert app.layout["data"].value == "First"
 
 
 def _fail_if_called(*args):
