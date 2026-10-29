@@ -64,8 +64,10 @@ def sbm_hull_2d(results: pd.DataFrame, x: str, y: str,
     (Gopalan et al. 2026, Figure 2, solid line).
 
     score_plans needs at least one "higher" metric, so this adds a
-    constant "higher" column of 1s. Every plan has the same value there,
-    so it changes no plan's rank; it only lets two "lower" metrics run.
+    constant "higher" column of 1s. Its weight cancels the model's v >= 1
+    floor (the paper's constraint 4), so the result is the plain convex
+    hull of Figure 2. It can include plans that score_plans scores below
+    1 on the same two metrics, such as a plan that is best on only one.
     """
     metrics = results[[x, y]].copy()
     metrics["_one"] = 1.0
@@ -151,6 +153,11 @@ def build_figure(results, direction, names, id_col, x, y, n,
     fig = go.Figure()
     if show_others and len(others):
         fig.add_trace(scatter(others, f"Other plans ({len(others)})", OTHER, 8, "circle", 0.8))
+    if len(near):
+        fig.add_trace(scatter(near, f"{len(near)} closest to frontier", NEAR, 11, "circle", 1))
+    fig.add_trace(scatter(eff, f"SBM frontier ({len(eff)})", FRONTIER, 14, "diamond", 1))
+
+    # lines go on top of the points, so the points cannot hide them
     if pareto is not None:
         fig.add_trace(go.Scatter(
             x=pareto[x], y=pareto[y], mode="lines",
@@ -159,14 +166,10 @@ def build_figure(results, direction, names, id_col, x, y, n,
             hoverinfo="skip"))
     if hull is not None:
         fig.add_trace(go.Scatter(
-            x=hull[x], y=hull[y], mode="lines+markers",
+            x=hull[x], y=hull[y], mode="lines",
             line=dict(color=INK, width=2),
-            marker=dict(color=INK, size=6),
             name=f"Convex hull (SBM), these 2 metrics ({len(hull)})",
             hoverinfo="skip"))
-    if len(near):
-        fig.add_trace(scatter(near, f"{len(near)} closest to frontier", NEAR, 11, "circle", 1))
-    fig.add_trace(scatter(eff, f"SBM frontier ({len(eff)})", FRONTIER, 14, "diamond", 1))
 
     if selected is not None:
         sel = results[results[id_col].astype(str) == selected]

@@ -1,8 +1,9 @@
 """Show the SBM frontier app for 60 made-up plans.
 
-mock_plans.csv has one row per plan and four metrics with trade-offs built
-in (more compact plans tend to split more counties), so the frontier is
-not trivial. All values are above 0, because SBM needs that.
+mock_plans.csv has one row per plan and four metrics. Each plan puts its
+effort on some metrics at the cost of the others, so every pair of
+metrics has a trade-off and the frontier lines span the plot. All values
+are above 0, because SBM needs that.
 
 Run it from the repo root, then open http://127.0.0.1:8050:
     micromamba run -n redistricting python -m examples.frontier_app.mock_plans_app
