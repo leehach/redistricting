@@ -43,78 +43,41 @@ from pyomo.environ import (
     value,
 )
 from pyomo.opt import SolverFactory
-import pandas as pd
 
-DIRECTIONS = {"higher", "lower"}
-
-
-def score_plans(metrics: pd.DataFrame, direction: dict[str, str]) -> pd.Series:
-    """Return the SBM score of each plan (row) in `metrics`.
-
-    `metrics` has one row per plan and one column per metric. `direction`
-    maps every column to "higher" (higher is better) or "lower" (lower is
-    better). The result has the same index as `metrics`.
-    """
-    missing = set(metrics.columns) - set(direction)
-    if missing:
-        raise ValueError(f"No direction given for metrics: {sorted(missing)}")
-
-    unknown = set(direction) - set(metrics.columns)
-    if unknown:
-        raise ValueError(f"Direction given for unknown metrics: {sorted(unknown)}")
-
-    invalid = set(direction.values()) - DIRECTIONS
-    if invalid:
-        raise ValueError(
-            f"Direction must be 'higher' or 'lower', got: {sorted(invalid)}"
-        )
-
-    higher = [name for name in metrics.columns if direction[name] == "higher"]
-    lower = [name for name in metrics.columns if direction[name] == "lower"]
-
-    # with no "higher" metric, the model caps every score at 0
-    if not higher:
-        raise ValueError("At least one metric must have direction 'higher'")
-
-    # `> 0` is False for NaN, so this also catches blank cells
-    if not (metrics > 0).all().all():
-        raise ValueError("All metric values must be greater than 0")
-
-    higher_metrics = metrics[higher]
-    lower_metrics = metrics[lower]
-
-    scores = [
-        calculate_efficiency(higher_metrics, lower_metrics, row)
-        for row in range(1, len(metrics) + 1)
-    ]
-
-    return pd.Series(scores, index=metrics.index, name="sbm_score")
+from redistricting.DEA.pyomo_data import make_dict
 
 
-def calculate_efficiency(good_plans, bad_plans, current_row):
+def calculate_efficiency(higher_metrics, lower_metrics, current_row):
     """Return the SBM score of one plan.
 
-    `good_plans` and `bad_plans` have one row per plan, in the same order.
-    Good columns are higher-is-better; bad columns are lower-is-better.
-    `current_row` is the plan to score, counted from 1 (`iHat` in the
-    original code). score_plans calls this once per row.
+    `higher_metrics` and `lower_metrics` have one row per plan, in the same
+    order. Their columns are the higher-is-better and lower-is-better
+    metrics. `current_row` is the plan to score, counted from 1 (`iHat` in
+    the original code). dea.score calls this once per plan.
 
-    Raises ValueError for mismatched rows or values of 0 or less, and
-    RuntimeError if the solver does not reach an optimal solution.
+    Raises ValueError for mismatched rows, no higher metric, or values of
+    0 or less, and RuntimeError if the solver does not reach an optimal
+    solution.
     """
-    (good_plan_num_rows, good_plan_num_cols) = good_plans.shape
-    (bad_plan_number_rows, bad_plan_number_cols) = bad_plans.shape
+    (plan_count, higher_col_count) = higher_metrics.shape
+    (lower_plan_count, lower_col_count) = lower_metrics.shape
 
-    if good_plan_num_rows != bad_plan_number_rows:
-        raise ValueError("Number of rows in good and bad plans are not equal!")
+    if plan_count != lower_plan_count:
+        raise ValueError("Number of rows in higher and lower metrics are not equal!")
 
-    good_plans_dict = _make_dict(good_plans)
-    bad_plans_dict = _make_dict(bad_plans)
+    # with no higher-is-better metric, the model caps every score at 0
+    if higher_col_count == 0:
+        raise ValueError(
+            "higher_metrics needs at least one column (a higher-is-better metric)"
+        )
+
+    higher_dict = make_dict(higher_metrics)
+    lower_dict = make_dict(lower_metrics)
 
     # a 0 turns a floor constraint into `score <= 0`, which breaks DEA
-    if any(v <= 0 for v in good_plans_dict.values()) or any(
-        v <= 0 for v in bad_plans_dict.values()
-    ):
+    # `> 0` is False for NaN, so this also catches blank cells
+    all_valid = all(v > 0 for v in [*higher_dict.values(), *lower_dict.values()])
+    if not all_valid:
         raise ValueError("All metric values must be greater than 0")
 
     # An AbstractModel is a template: declare the parts now, and Pyomo
@@ -122,21 +85,21 @@ def calculate_efficiency(good_plans, bad_plans, current_row):
     dea_model = AbstractModel()
 
     # S in the SBM math: the number of good metrics plus bad metrics
-    total_metrics = good_plan_num_cols + bad_plan_number_cols
+    total_metrics = higher_col_count + lower_col_count
 
     # Sets (index ranges), counted from 1. The attribute names are ours to
     # choose; Pyomo finds each part by its type (RangeSet, Var, ...).
-    dea_model.good_cols = RangeSet(1, good_plan_num_cols)  # good metrics
-    dea_model.bad_cols = RangeSet(1, bad_plan_number_cols)  # bad metrics
+    dea_model.higher_cols = RangeSet(1, higher_col_count)  # good metrics
+    dea_model.lower_cols = RangeSet(1, lower_col_count)  # bad metrics
 
     # one index per plan (row) - good and bad have the same rows, checked above
-    dea_model.plans = RangeSet(1, good_plan_num_rows)
+    dea_model.plans = RangeSet(1, plan_count)
 
     # Variables are the numbers the solver picks to get the best objective
     # while keeping every constraint. Var(some_set) makes one per item in
     # the set (indexed); Var() makes just one.
-    dea_model.good_weights = Var(dea_model.good_cols)  # one weight per metric
-    dea_model.bad_weights = Var(dea_model.bad_cols)  # one weight per metric
+    dea_model.higher_weights = Var(dea_model.higher_cols)  # one weight per metric
+    dea_model.lower_weights = Var(dea_model.lower_cols)  # one weight per metric
     dea_model.baseline = Var()  # v, the bar - see principal_constraint
     dea_model.efficiency_score = Var()  # the SBM score
 
@@ -155,12 +118,12 @@ def calculate_efficiency(good_plans, bad_plans, current_row):
             model.efficiency_score
             + model.baseline
             - sum(
-                good_plans_dict[current_row, i] * model.good_weights[i]
-                for i in model.good_cols
+                higher_dict[current_row, i] * model.higher_weights[i]
+                for i in model.higher_cols
             )
             + sum(
-                bad_plans_dict[current_row, j] * model.bad_weights[j]
-                for j in model.bad_cols
+                lower_dict[current_row, j] * model.lower_weights[j]
+                for j in model.lower_cols
             )
             == 1.0
         )
@@ -174,12 +137,12 @@ def calculate_efficiency(good_plans, bad_plans, current_row):
     def principal_constraint_rule(model, plan):
         return (
             sum(
-                good_plans_dict[plan, i] * model.good_weights[i]
-                for i in model.good_cols
+                higher_dict[plan, i] * model.higher_weights[i]
+                for i in model.higher_cols
             )
             - model.baseline
             - sum(
-                bad_plans_dict[plan, j] * model.bad_weights[j] for j in model.bad_cols
+                lower_dict[plan, j] * model.lower_weights[j] for j in model.lower_cols
             )
             <= 0.0
         )
@@ -197,23 +160,23 @@ def calculate_efficiency(good_plans, bad_plans, current_row):
     # solver cannot ignore a metric, and every slack counts.
 
     # `metric` is the number of one metric (column). Pyomo calls the rule once
-    # for each value in good_cols, so there is one floor per good metric.
-    def good_floor_constraint_rule(model, metric):
+    # for each value in higher_cols, so there is one floor per good metric.
+    def higher_floor_constraint_rule(model, metric):
         return (
-            total_metrics * good_plans_dict[current_row, metric]
-        ) * model.good_weights[metric] - model.efficiency_score >= 0.0
+            total_metrics * higher_dict[current_row, metric]
+        ) * model.higher_weights[metric] - model.efficiency_score >= 0.0
 
-    dea_model.good_floor_constraint = Constraint(
-        dea_model.good_cols, rule=good_floor_constraint_rule
+    dea_model.higher_floor_constraint = Constraint(
+        dea_model.higher_cols, rule=higher_floor_constraint_rule
     )
 
-    def bad_floor_constraint_rule(model, metric):
+    def lower_floor_constraint_rule(model, metric):
         return (
-            total_metrics * bad_plans_dict[current_row, metric]
-        ) * model.bad_weights[metric] - model.efficiency_score >= 0.0
+            total_metrics * lower_dict[current_row, metric]
+        ) * model.lower_weights[metric] - model.efficiency_score >= 0.0
 
-    dea_model.bad_floor_constraint = Constraint(
-        dea_model.bad_cols, rule=bad_floor_constraint_rule
+    dea_model.lower_floor_constraint = Constraint(
+        dea_model.lower_cols, rule=lower_floor_constraint_rule
     )
 
     # build a concrete, solvable model from the template
@@ -234,26 +197,3 @@ def calculate_efficiency(good_plans, bad_plans, current_row):
         )
 
     return value(model.obj)
-
-
-def _make_dict(df):
-    """Turn a DataFrame into a dict that maps (row, col) to its value.
-
-    Both numbers start at 1, to match the model's RangeSets:
-
-        0.40,0.70        {(1, 1): 0.40, (1, 2): 0.70,   # plan 1
-        0.50,0.60   ->    (2, 1): 0.50, (2, 2): 0.60,   # plan 2
-        0.45,0.80         (3, 1): 0.45, (3, 2): 0.80}   # plan 3
-
-    Pyomo can read some data straight from a DataFrame, so we may not
-    need this.
-    """
-    # a plain NumPy array - reading one cell is much faster than df.iloc
-    values = df.to_numpy()
-    (M, N) = values.shape  # rows, columns
-
-    return {
-        (row + 1, col + 1): values[row, col]
-        for row in range(M)
-        for col in range(N)
-    }
