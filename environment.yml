@@ -10,6 +10,8 @@ dependencies:
   - pysal
   - shapely
   - geopandas
+  - dash
+  - plotly
   # optional, testing, etc.
   - pytest
   # docs
