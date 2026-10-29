@@ -11,7 +11,7 @@
   seconds.
 
 Run it from the repo root, then open http://127.0.0.1:8050:
-    micromamba run -n redistricting python -m examples.frontier_app.app
+    micromamba run -n redistricting python -m examples.frontier_app.app # TODO Fix - no micromanba for all.
 """
 
 import tempfile

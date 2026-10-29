@@ -31,6 +31,10 @@ Pass more than one Dataset to switch between them with the "Data" dropdown.
 "higher" or "lower", the same as score_plans.
 """
 
+# NOTES
+# get rid of this annotations statement
+# scale of plot should encompass entire set, even when subset is shown so it doesn't jump around
+
 from __future__ import annotations
 
 import hashlib
@@ -114,7 +118,9 @@ def pareto_2d(results: pd.DataFrame, x: str, y: str,
 
     This is the bivariate Pareto frontier (Gopalan et al. 2026, Figure 4).
     """
-    # flip "lower" metrics so that higher is always better
+    # Negate "lower" metrics so that higher is always better: 3 splits
+    # beats 10, and -3 > -10. The order of plans stays the same, so the
+    # loop below needs just one rule.
     x_better = results[x] if direction[x] == "higher" else -results[x]
     y_better = results[y] if direction[y] == "higher" else -results[y]
 
