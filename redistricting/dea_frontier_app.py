@@ -17,26 +17,17 @@ Note: the SBM frontier uses ALL metrics at once, so a crimson plan can sit
 inside the dashed 2-metric line. That's expected: it earns its place on the
 frontier with a metric that isn't on the current axes.
 
-Usage
------
-    python -m redistricting.dea_frontier_app                     # mock data
-    python -m redistricting.dea_frontier_app --csv metrics.csv   # real metrics
-    python -m redistricting.dea_frontier_app --n 15 --port 8051
+Usage (see examples/frontier_app/mock_plans_app.py):
 
-The app opens in your browser at http://127.0.0.1:8050. Stop it with Ctrl+C.
-
-In code (functions take DataFrames, not file paths):
-
-    results = add_sbm_scores(metrics_df, direction)
-    app = create_app(results, direction)
+    results = add_sbm_scores(plans, direction)
+    app = create_app(results, direction, id_col)
     app.run()
+
+`plans` has one row per plan. `direction` maps each metric column to
+"higher" or "lower", the same as score_plans.
 """
 
 from __future__ import annotations
-
-import argparse
-import threading
-import webbrowser
 
 import numpy as np
 import pandas as pd
@@ -45,54 +36,8 @@ from dash import Dash, Input, Output, ctx, dcc, html, no_update
 
 from redistricting.DEA.slacks_based_measure import score_plans
 
-# Column name -> "higher" if higher values are better, "lower" if lower is
-# better. Same shape as the `direction` argument of score_plans.
-DEFAULT_DIRECTION: dict[str, str] = {
-    "Compactness": "higher",    # e.g. mean Polsby-Popper, 0-1
-    "County_Splits": "lower",   # count of split counties
-    "Pop_Dev_Pct": "lower",     # max population deviation, percent
-    "Partisan_Gap": "lower",    # e.g. |efficiency gap| or partisan bias
-}
-
-DISPLAY_NAMES: dict[str, str] = {
-    "Compactness": "Compactness (PP)",
-    "County_Splits": "County Splits",
-    "Pop_Dev_Pct": "Pop. Deviation (%)",
-    "Partisan_Gap": "Partisan Gap",
-}
-
 # GLPK returns 0.9999999... for some frontier plans.
 TOL = 1e-6
-
-
-# --------------------------------------------------------------------------
-# Mock data
-# --------------------------------------------------------------------------
-def make_mock_metrics(n: int = 60, seed: int = 42) -> pd.DataFrame:
-    """Synthetic plan metrics with realistic trade-offs.
-
-    Unlike independent random columns, these build in tension between goals
-    (more compact plans tend to split more counties, tighter population
-    balance costs a little compactness), so the frontier is meaningful.
-    Every value is above 0, because SBM needs that.
-    """
-    rng = np.random.default_rng(seed)
-    quality = rng.uniform(0, 1, n)        # overall plan quality
-    tradeoff = rng.uniform(0, 1, n)       # compactness-vs-county-splits lean
-
-    compactness = 0.20 + 0.30 * quality * (0.5 + 0.5 * tradeoff) + rng.normal(0, 0.02, n)
-    county_splits = np.round(4 + 14 * (1 - quality) * (0.4 + 0.6 * tradeoff)
-                             + rng.normal(0, 1.5, n))
-    pop_dev = 0.05 * (1 - quality) ** 1.5 + 0.004 * tradeoff + np.abs(rng.normal(0, 0.003, n))
-    partisan_gap = np.abs(0.08 * (1 - quality) * rng.uniform(0.3, 1.0, n) + rng.normal(0, 0.01, n))
-
-    return pd.DataFrame({
-        "Plan_ID": [f"Plan_{i:03d}" for i in range(1, n + 1)],
-        "Compactness": np.clip(compactness, 0.05, 0.95).round(4),
-        "County_Splits": np.clip(county_splits, 1, None).astype(int),
-        "Pop_Dev_Pct": np.clip(pop_dev, 0.0001, None).round(4),
-        "Partisan_Gap": np.clip(partisan_gap, 0.0001, None).round(4),
-    })
 
 
 # --------------------------------------------------------------------------
@@ -286,13 +231,13 @@ def plan_panel(results, direction, names, id_col, plan_id):
 def create_app(
     results: pd.DataFrame,
     direction: dict[str, str],
-    id_col: str = "Plan_ID",
-    display_names: dict[str, str] | None = None,
+    id_col: str,
+    labels: dict[str, str] | None = None,
     n_default: int = 10,
     title: str = "SBM Frontier of Prospective Redistricting Plans",
 ) -> Dash:
     """Build the Dash app from add_sbm_scores() output."""
-    names = {**DISPLAY_NAMES, **(display_names or {})}
+    names = labels or {}
     results = results.reset_index(drop=True)
     cols = list(direction)
     n_off = int((~results["On_Frontier"]).sum())
@@ -378,30 +323,3 @@ def create_app(
         return plan_panel(results, direction, names, id_col, selected)
 
     return app
-
-
-# --------------------------------------------------------------------------
-# CLI
-# --------------------------------------------------------------------------
-def main():
-    p = argparse.ArgumentParser(description="Interactive SBM frontier explorer")
-    p.add_argument("--csv", help="metrics table (one row per plan); omit to use mock data")
-    p.add_argument("--id-col", default="Plan_ID")
-    p.add_argument("--n", type=int, default=10, help="plans closest to the frontier to show")
-    p.add_argument("--port", type=int, default=8050)
-    p.add_argument("--no-browser", action="store_true", help="don't open a browser tab")
-    args = p.parse_args()
-
-    df = pd.read_csv(args.csv) if args.csv else make_mock_metrics()
-    results = add_sbm_scores(df, DEFAULT_DIRECTION)
-    app = create_app(results, DEFAULT_DIRECTION, id_col=args.id_col, n_default=args.n)
-
-    url = f"http://127.0.0.1:{args.port}"
-    print(f"\nSBM frontier app running at {url}  (press Ctrl+C to stop)\n")
-    if not args.no_browser:
-        threading.Timer(1.5, webbrowser.open, args=[url]).start()
-    app.run(port=args.port, debug=False)
-
-
-if __name__ == "__main__":
-    main()
