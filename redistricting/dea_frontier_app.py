@@ -126,12 +126,12 @@ def fmt(v: float) -> str:
 # Figure
 # --------------------------------------------------------------------------
 def build_figure(results, direction, names, id_col, x, y, n,
-                 show_others, pareto, show_pareto, hull, selected) -> go.Figure:
+                 show_others, pareto, hull, selected) -> go.Figure:
     """Draw the scatter plot.
 
-    `pareto` is pareto_2d() output: its plans are the bold points, and
-    show_pareto adds the dashed line through them. `hull` is
-    convex_hull_2d() output for the solid line. Pass None to leave either out.
+    `pareto` is pareto_2d() output, drawn as bold points joined by a
+    dashed line. `hull` is convex_hull_2d() output, drawn as a solid
+    line. Pass None to leave either out.
     """
     eff = results[results["On_Frontier"]]
     near = near_frontier(results, n)
@@ -151,30 +151,27 @@ def build_figure(results, direction, names, id_col, x, y, n,
             hovertemplate=hover,
         )
 
-    # Draw order, back to front: plain plans, lines, then the plans on the
-    # 2-metric frontier, then the all-metric x marks, so nothing important
-    # is hidden.
+    # Draw order, back to front: plain plans, the hull, the Pareto
+    # frontier, then the all-metric x marks, so nothing important is hidden.
     fig = go.Figure()
     if show_others and len(others):
         fig.add_trace(scatter(others, f"Other plans ({len(others)})", OTHER, 8, "circle", 0.8))
     if len(near):
         fig.add_trace(scatter(near, f"{len(near)} closest to frontier", NEAR, 10, "circle", 1))
 
-    if pareto is not None and show_pareto:
-        fig.add_trace(go.Scatter(
-            x=pareto[x], y=pareto[y], mode="lines",
-            line=dict(color=MUTED, width=2, dash="dash"),
-            name="Pareto frontier, these 2 metrics", hoverinfo="skip"))
     if hull is not None:
         fig.add_trace(go.Scatter(
             x=hull[x], y=hull[y], mode="lines",
             line=dict(color=INK, width=2),
             name=f"Convex hull, these 2 metrics ({len(hull)})",
             hoverinfo="skip"))
-
     if pareto is not None:
-        fig.add_trace(scatter(pareto, f"Frontier for these 2 metrics ({len(pareto)})",
-                              INK, 12, "circle", 1))
+        front = scatter(pareto, f"Pareto frontier, these 2 metrics ({len(pareto)})",
+                        INK, 12, "circle", 1)
+        front.update(mode="lines+markers",
+                     line=dict(color=MUTED, width=2, dash="dash"))
+        fig.add_trace(front)
+
     fig.add_trace(scatter(eff, f"DEA score 1 on all {len(direction)} metrics ({len(eff)})",
                           FRONTIER, 8, "x", 1, outline=0))
 
@@ -290,8 +287,8 @@ def create_app(
     app.layout = html.Div([
         html.H2(title, style={"margin": "0 0 4px"}),
         html.P("Axes are flipped where needed so up and right are always better. "
-               "Dark points: the frontier for the two metrics shown (no plan "
-               "beats them on both), joined by the dashed line. Solid line: "
+               "Dark points on the dashed line: the Pareto frontier for the "
+               "two metrics shown (no plan beats them on both). Solid line: "
                "its convex hull. "
                f"Red x: the {n_eff} of {len(results)} plans with DEA score 1 "
                f"on all {len(cols)} metrics. An x can sit far from the lines, "
@@ -346,7 +343,7 @@ def create_app(
     def _update_figure(x, y, n, toggles, selected):
         toggles = toggles or []
         hull = pareto = None
-        if x != y:
+        if "pareto" in toggles and x != y:
             pareto = pareto_2d(results, x, y, direction)
         if "hull" in toggles and x != y:
             # one GLPK solve per plan, so score each axis pair only once
@@ -355,8 +352,7 @@ def create_app(
                 hulls[pair] = convex_hull_2d(results, x, y, direction)
             hull = hulls[pair].sort_values([x, y])
         return build_figure(results, direction, names, id_col, x, y, n or 0,
-                            "others" in toggles, pareto, "pareto" in toggles,
-                            hull, selected)
+                            "others" in toggles, pareto, hull, selected)
 
     @app.callback(
         Output("selected", "data"),
