@@ -8,13 +8,15 @@ A Dash app that scores plans with redistricting.DEA.slacks_based_measure:
   * the frontier plans (SBM score 1) in crimson
   * the n plans closest to the frontier (highest SBM scores among the
     other plans) in blue, with a slider for n
-  * optionally, all other plans in light gray, and the 2-metric Pareto
-    frontier as a dashed staircase line
+  * for just the two metrics on the axes, the Pareto frontier (dashed)
+    and its convex hull from SBM (solid), as in Gopalan et al. 2026,
+    Figure 2
+  * optionally, all other plans in light gray
   * click any plan to see its metrics, its percentile on each one, and
     its SBM score
 
-Note: the SBM frontier uses ALL metrics at once, so a crimson plan can sit
-inside the dashed 2-metric line. That's expected: it earns its place on the
+Note: the crimson plans use ALL metrics at once, so a crimson plan can sit
+inside the 2-metric lines. That's expected: it earns its place on the
 frontier with a metric that isn't on the current axes.
 
 Usage (see examples/frontier_app/mock_plans_app.py):
@@ -29,7 +31,6 @@ Usage (see examples/frontier_app/mock_plans_app.py):
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from dash import Dash, Input, Output, ctx, dcc, html, no_update
@@ -55,20 +56,47 @@ def add_sbm_scores(df: pd.DataFrame, direction: dict[str, str]) -> pd.DataFrame:
     return results
 
 
-def pareto_nondominated(values: np.ndarray, higher_better: np.ndarray) -> np.ndarray:
-    """Boolean mask of plans not dominated by any other plan.
+def sbm_hull_2d(results: pd.DataFrame, x: str, y: str,
+                direction: dict[str, str]) -> pd.DataFrame:
+    """Plans with SBM score 1 for just metrics x and y, sorted by x.
 
-    values: (n, m) array; higher_better: (m,) bool array.
+    These are the corners of the convex hull of the Pareto frontier
+    (Gopalan et al. 2026, Figure 2, solid line).
+
+    score_plans needs at least one "higher" metric, so this adds a
+    constant "higher" column of 1s. Every plan has the same value there,
+    so it changes no plan's rank; it only lets two "lower" metrics run.
     """
-    v = np.where(higher_better, values, -values)  # flip so higher is always better
-    n = v.shape[0]
-    mask = np.ones(n, dtype=bool)
-    for i in range(n):
-        ge = np.all(v >= v[i], axis=1)
-        gt = np.any(v > v[i], axis=1)
-        if np.any(ge & gt):
-            mask[i] = False
-    return mask
+    metrics = results[[x, y]].copy()
+    metrics["_one"] = 1.0
+    scores = score_plans(metrics, {x: direction[x], y: direction[y],
+                                   "_one": "higher"})
+    return results[scores >= 1 - TOL].sort_values([x, y])
+
+
+def pareto_2d(results: pd.DataFrame, x: str, y: str,
+              direction: dict[str, str]) -> pd.DataFrame:
+    """Plans that no other plan beats on both x and y, sorted by x.
+
+    This is the bivariate Pareto frontier (Gopalan et al. 2026, Figure 4).
+    """
+    # flip "lower" metrics so that higher is always better
+    x_better = results[x] if direction[x] == "higher" else -results[x]
+    y_better = results[y] if direction[y] == "higher" else -results[y]
+
+    # Walk from best x to worst x. A plan is on the frontier when its y
+    # beats every plan seen so far, since those all have an x at least
+    # as good.
+    order = pd.DataFrame({"x": x_better, "y": y_better}).sort_values(
+        ["x", "y"], ascending=False)
+    keep = []
+    best_y = float("-inf")
+    for index, y_value in order["y"].items():
+        if y_value > best_y:
+            keep.append(index)
+            best_y = y_value
+
+    return results.loc[keep].sort_values([x, y])
 
 
 # Same colors as the parallel coordinates plot.
@@ -89,18 +117,6 @@ def near_frontier(results: pd.DataFrame, n: int) -> pd.DataFrame:
     return results[~results["On_Frontier"]].nlargest(n, "SBM_Score")
 
 
-def pareto_2d(results: pd.DataFrame, x: str, y: str,
-              direction: dict[str, str]) -> pd.DataFrame:
-    """Plans on the Pareto frontier for just two metrics, in drawing order."""
-    vals = results[[x, y]].to_numpy(dtype=float)
-    hb = np.array([direction[x] == "higher", direction[y] == "higher"])
-    front = results[pareto_nondominated(vals, hb)].copy()
-    # sort along the x axis from worst to best, so the staircase draws cleanly
-    front["_u"] = front[x] if hb[0] else -front[x]
-    front["_v"] = front[y] if hb[1] else -front[y]
-    return front.sort_values(["_u", "_v"], ascending=[True, False])
-
-
 def fmt(v: float) -> str:
     return f"{v:,.0f}" if float(v).is_integer() and abs(v) >= 1 else f"{v:.4g}"
 
@@ -109,7 +125,12 @@ def fmt(v: float) -> str:
 # Figure
 # --------------------------------------------------------------------------
 def build_figure(results, direction, names, id_col, x, y, n,
-                 show_others, show_line, selected) -> go.Figure:
+                 show_others, hull, pareto, selected) -> go.Figure:
+    """Draw the scatter plot.
+
+    `hull` is sbm_hull_2d() output and `pareto` is pareto_2d() output.
+    Pass None to leave a line out.
+    """
     eff = results[results["On_Frontier"]]
     near = near_frontier(results, n)
     others = results.drop(index=eff.index.union(near.index))
@@ -130,12 +151,19 @@ def build_figure(results, direction, names, id_col, x, y, n,
     fig = go.Figure()
     if show_others and len(others):
         fig.add_trace(scatter(others, f"Other plans ({len(others)})", OTHER, 8, "circle", 0.8))
-    if show_line:
-        front = pareto_2d(results, x, y, direction)
+    if pareto is not None:
         fig.add_trace(go.Scatter(
-            x=front[x], y=front[y], mode="lines", line_shape="hv",
+            x=pareto[x], y=pareto[y], mode="lines",
             line=dict(color=MUTED, width=2, dash="dash"),
-            name="Frontier for these 2 metrics only", hoverinfo="skip"))
+            name=f"Pareto frontier, these 2 metrics ({len(pareto)})",
+            hoverinfo="skip"))
+    if hull is not None:
+        fig.add_trace(go.Scatter(
+            x=hull[x], y=hull[y], mode="lines+markers",
+            line=dict(color=INK, width=2),
+            marker=dict(color=INK, size=6),
+            name=f"Convex hull (SBM), these 2 metrics ({len(hull)})",
+            hoverinfo="skip"))
     if len(near):
         fig.add_trace(scatter(near, f"{len(near)} closest to frontier", NEAR, 11, "circle", 1))
     fig.add_trace(scatter(eff, f"SBM frontier ({len(eff)})", FRONTIER, 14, "diamond", 1))
@@ -243,6 +271,7 @@ def create_app(
     n_off = int((~results["On_Frontier"]).sum())
     n_default = min(n_default, n_off)
     n_eff = int(results["On_Frontier"].sum())
+    hulls: dict[frozenset[str], pd.DataFrame] = {}  # axis pair -> sbm_hull_2d()
 
     options = [{"label": names.get(c, c), "value": c} for c in cols]
     label = {"fontSize": "12px", "color": MUTED, "marginBottom": "4px", "display": "block"}
@@ -252,8 +281,11 @@ def create_app(
         html.H2(title, style={"margin": "0 0 4px"}),
         html.P(f"{n_eff} of {len(results)} plans are on the SBM frontier (crimson). "
                "Axes are flipped where needed so up and right are always better. "
-               "The SBM frontier uses all metrics, so a crimson plan can sit inside "
-               "the dashed line, which uses only the two metrics shown.",
+               "The crimson plans use all metrics. The two lines use only the "
+               "two metrics shown, so a crimson plan can sit inside them. "
+               "Dashed: the Pareto frontier (no plan beats these on both "
+               "metrics). Solid: its convex hull, the plans with SBM score 1 "
+               "on these two metrics.",
                style={"color": MUTED, "margin": "0 0 16px", "maxWidth": "900px"}),
 
         # Controls
@@ -275,8 +307,9 @@ def create_app(
                      style={"width": "260px"}),
             dcc.Checklist(id="toggles",
                           options=[{"label": " Show other plans", "value": "others"},
-                                   {"label": " Show 2-metric frontier line", "value": "line"}],
-                          value=["others", "line"],
+                                   {"label": " Show convex hull (SBM)", "value": "hull"},
+                                   {"label": " Show Pareto frontier", "value": "pareto"}],
+                          value=["others", "hull", "pareto"],
                           style={"fontSize": "14px"},
                           labelStyle={"display": "block", "marginBottom": "4px"}),
         ], style={"display": "flex", "gap": "24px", "flexWrap": "wrap",
@@ -302,8 +335,17 @@ def create_app(
     )
     def _update_figure(x, y, n, toggles, selected):
         toggles = toggles or []
+        hull = pareto = None
+        if "hull" in toggles and x != y:
+            # one GLPK solve per plan, so score each axis pair only once
+            pair = frozenset((x, y))
+            if pair not in hulls:
+                hulls[pair] = sbm_hull_2d(results, x, y, direction)
+            hull = hulls[pair].sort_values([x, y])
+        if "pareto" in toggles and x != y:
+            pareto = pareto_2d(results, x, y, direction)
         return build_figure(results, direction, names, id_col, x, y, n or 0,
-                            "others" in toggles, "line" in toggles, selected)
+                            "others" in toggles, hull, pareto, selected)
 
     @app.callback(
         Output("selected", "data"),
