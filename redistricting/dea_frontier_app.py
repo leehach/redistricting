@@ -5,19 +5,18 @@ A Dash app that scores plans with redistricting.DEA.slacks_based_measure:
 
   * a scatter plot of any two metrics, with every axis oriented so that
     up and right are better
-  * the frontier plans (SBM score 1) in crimson
-  * the n plans closest to the frontier (highest SBM scores among the
-    other plans) in blue, with a slider for n
-  * for just the two metrics on the axes, the Pareto frontier (dashed)
-    and its convex hull from SBM (solid), as in Gopalan et al. 2026,
-    Figure 2
-  * optionally, all other plans in light gray
+  * for just the two metrics on the axes: the Pareto frontier plans as
+    dark points joined by a dashed line, and its convex hull from SBM as
+    a solid line, as in Gopalan et al. 2026, Figure 2
+  * a red x on each plan with SBM score 1 on all metrics
+  * optionally, the n plans closest to that frontier (highest SBM scores
+    among the other plans) in blue, with a slider for n
   * click any plan to see its metrics, its percentile on each one, and
     its SBM score
 
-Note: the crimson plans use ALL metrics at once, so a crimson plan can sit
-inside the 2-metric lines. That's expected: it earns its place on the
-frontier with a metric that isn't on the current axes.
+Note: a red x uses ALL metrics at once, so it can sit far from the
+2-metric lines. That's expected: it earns its place on the frontier with
+a metric that isn't on the current axes.
 
 Usage (see examples/frontier_app/mock_plans_app.py):
 
@@ -127,49 +126,57 @@ def fmt(v: float) -> str:
 # Figure
 # --------------------------------------------------------------------------
 def build_figure(results, direction, names, id_col, x, y, n,
-                 show_others, hull, pareto, selected) -> go.Figure:
+                 show_others, pareto, show_pareto, hull, selected) -> go.Figure:
     """Draw the scatter plot.
 
-    `hull` is sbm_hull_2d() output and `pareto` is pareto_2d() output.
-    Pass None to leave a line out.
+    `pareto` is pareto_2d() output: its plans are the bold points, and
+    show_pareto adds the dashed line through them. `hull` is
+    sbm_hull_2d() output for the solid line. Pass None to leave either out.
     """
     eff = results[results["On_Frontier"]]
     near = near_frontier(results, n)
-    others = results.drop(index=eff.index.union(near.index))
+    front_index = pareto.index if pareto is not None else pd.Index([])
+    others = results.drop(index=near.index.union(front_index))
     nx, ny = names.get(x, x), names.get(y, y)
 
     hover = ("<b>%{customdata[0]}</b><br>" + nx + ": %{x}<br>" + ny + ": %{y}"
              "<br>SBM score: %{customdata[1]:.3f}<extra></extra>")
 
-    def scatter(df, name, color, size, symbol, opacity):
+    def scatter(df, name, color, size, symbol, opacity, outline=1.5):
         return go.Scatter(
             x=df[x], y=df[y], mode="markers", name=name,
             marker=dict(color=color, size=size, symbol=symbol, opacity=opacity,
-                        line=dict(color="white", width=1.5)),
+                        line=dict(color="white", width=outline)),
             customdata=df[[id_col, "SBM_Score"]].astype(object).to_numpy(),
             hovertemplate=hover,
         )
 
+    # Draw order, back to front: plain plans, lines, then the plans on the
+    # 2-metric frontier, then the all-metric x marks, so nothing important
+    # is hidden.
     fig = go.Figure()
     if show_others and len(others):
         fig.add_trace(scatter(others, f"Other plans ({len(others)})", OTHER, 8, "circle", 0.8))
     if len(near):
-        fig.add_trace(scatter(near, f"{len(near)} closest to frontier", NEAR, 11, "circle", 1))
-    fig.add_trace(scatter(eff, f"SBM frontier ({len(eff)})", FRONTIER, 14, "diamond", 1))
+        fig.add_trace(scatter(near, f"{len(near)} closest to frontier", NEAR, 10, "circle", 1))
 
-    # lines go on top of the points, so the points cannot hide them
-    if pareto is not None:
+    if pareto is not None and show_pareto:
         fig.add_trace(go.Scatter(
             x=pareto[x], y=pareto[y], mode="lines",
             line=dict(color=MUTED, width=2, dash="dash"),
-            name=f"Pareto frontier, these 2 metrics ({len(pareto)})",
-            hoverinfo="skip"))
+            name="Pareto frontier, these 2 metrics", hoverinfo="skip"))
     if hull is not None:
         fig.add_trace(go.Scatter(
             x=hull[x], y=hull[y], mode="lines",
             line=dict(color=INK, width=2),
             name=f"Convex hull (SBM), these 2 metrics ({len(hull)})",
             hoverinfo="skip"))
+
+    if pareto is not None:
+        fig.add_trace(scatter(pareto, f"Frontier for these 2 metrics ({len(pareto)})",
+                              INK, 12, "circle", 1))
+    fig.add_trace(scatter(eff, f"Score 1 on all {len(direction)} metrics ({len(eff)})",
+                          FRONTIER, 8, "x", 1, outline=0))
 
     if selected is not None:
         sel = results[results[id_col].astype(str) == selected]
@@ -264,7 +271,7 @@ def create_app(
     direction: dict[str, str],
     id_col: str,
     labels: dict[str, str] | None = None,
-    n_default: int = 10,
+    n_default: int = 0,
     title: str = "SBM Frontier of Prospective Redistricting Plans",
 ) -> Dash:
     """Build the Dash app from add_sbm_scores() output."""
@@ -282,13 +289,13 @@ def create_app(
     app = Dash(__name__, title="SBM Frontier")
     app.layout = html.Div([
         html.H2(title, style={"margin": "0 0 4px"}),
-        html.P(f"{n_eff} of {len(results)} plans are on the SBM frontier (crimson). "
-               "Axes are flipped where needed so up and right are always better. "
-               "The crimson plans use all metrics. The two lines use only the "
-               "two metrics shown, so a crimson plan can sit inside them. "
-               "Dashed: the Pareto frontier (no plan beats these on both "
-               "metrics). Solid: its convex hull, the plans with SBM score 1 "
-               "on these two metrics.",
+        html.P("Axes are flipped where needed so up and right are always better. "
+               "Dark points: the frontier for the two metrics shown (no plan "
+               "beats them on both), joined by the dashed line. Solid line: "
+               "its convex hull. "
+               f"Red x: the {n_eff} of {len(results)} plans with SBM score 1 "
+               f"on all {len(cols)} metrics. An x can sit far from the lines, "
+               "because it is on the frontier through a metric not shown.",
                style={"color": MUTED, "margin": "0 0 16px", "maxWidth": "900px"}),
 
         # Controls
@@ -339,16 +346,17 @@ def create_app(
     def _update_figure(x, y, n, toggles, selected):
         toggles = toggles or []
         hull = pareto = None
+        if x != y:
+            pareto = pareto_2d(results, x, y, direction)
         if "hull" in toggles and x != y:
             # one GLPK solve per plan, so score each axis pair only once
             pair = frozenset((x, y))
             if pair not in hulls:
                 hulls[pair] = sbm_hull_2d(results, x, y, direction)
             hull = hulls[pair].sort_values([x, y])
-        if "pareto" in toggles and x != y:
-            pareto = pareto_2d(results, x, y, direction)
         return build_figure(results, direction, names, id_col, x, y, n or 0,
-                            "others" in toggles, hull, pareto, selected)
+                            "others" in toggles, pareto, "pareto" in toggles,
+                            hull, selected)
 
     @app.callback(
         Output("selected", "data"),
