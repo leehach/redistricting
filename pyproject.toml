@@ -1,0 +1,29 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "redistricting"
+version = "0.0.1"
+authors = [
+  { name="Lee Hachadoorian", email="Lee.Hachadoorian@gmail.com" },
+  { name="Jason Bandjough", email="jwbandjough@gmail.com" },
+  { name="Katherine Chu", email="katherinechu241@gmail.com" },
+  { name="Harrison Dandridge", email="HarrisonDandridge@gmail.com" },
+  { name="Charlie Dawson", email="charliehdawson@gmail.com" },
+  { name="Leith Kusmider", email="leithkusmider@gmail.com" },
+  { name="Ben Polinsky", email="benjamin.polinsky@gmail.com" },
+  { name="Maximilian Waechter", email="maxwaechter@mac.com" }
+]
+description = "Tools for generating and analyzying electoral redistricting plans"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/leehach/redistricting"
+Issues = "https://github.com/leehach/redistricting/issues"
