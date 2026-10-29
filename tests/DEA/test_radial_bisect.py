@@ -1,7 +1,7 @@
 import math
 
 import pandas as pd
-from pytest import approx, mark, raises
+from pytest import approx, raises
 
 from redistricting.DEA import dea
 from redistricting.DEA.radial_bisect import calculate_radial_efficiency
@@ -72,27 +72,37 @@ def test_radial_allows_a_zero_metric():
     assert list(scores) == approx([1, 0.8], abs=TOLERANCE)  # 2nd: 0.40 / 0.50
 
 
-ALL_ZERO_REASON = "Known limitation: all-zero plan scores THETA_FLOOR"
+# Every θ works for these plans, so the search falls to THETA_FLOOR. That
+# is not a measured score, so radial returns NaN (see NOT MEASURED in
+# radial_bisect.py).
 
 
-@mark.xfail(strict=True, reason=ALL_ZERO_REASON)
-def test_radial_all_zero_lower_plan_scores_one():
-    # 0 splits is the best possible, so nothing beats the 1st plan
+def test_radial_all_zero_lower_plan_scores_nan():
+    # 0 splits beats 4 at every θ, so neither plan has a measured score
     metrics = pd.DataFrame({"county_splits": [0, 4]})
 
     scores = radial(metrics, {"county_splits": "lower"})
 
-    assert scores[0] == approx(1)
+    assert scores.isna().all()
 
 
-@mark.xfail(strict=True, reason=ALL_ZERO_REASON)
-def test_radial_all_zero_mixed_plan_scores_one():
-    # the 2nd plan has more compactness but more splits, so neither wins
+def test_radial_all_zero_mixed_plan_scores_nan():
+    # the 2nd plan has more compactness but more splits, so it scores 1
     metrics = pd.DataFrame({"compactness": [0, 0.5], "county_splits": [0, 4]})
 
     scores = radial(metrics)
 
-    assert scores[0] == approx(1)
+    assert math.isnan(scores[0])
+    assert scores[1] == approx(1)
+
+
+def test_radial_all_zero_higher_plan_scores_nan():
+    metrics = pd.DataFrame({"compactness": [0, 0.5]})
+
+    scores = radial(metrics, {"compactness": "higher"})
+
+    assert math.isnan(scores[0])
+    assert scores[1] == approx(1)
 
 
 def test_radial_nan_raises():

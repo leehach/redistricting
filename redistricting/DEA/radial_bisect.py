@@ -77,19 +77,24 @@ takes about 14 solves. For plan A:
     5     0.7815   no       0.7815 .. 0.8127
     ...                     closes in on 0.8
 
-KNOWN LIMITATION: a plan with 0 on EVERY metric scores about THETA_FLOOR,
-even when no plan beats it. A 0 takes θ out of that metric's constraint
-(θ * 0 = 0 and 0 / θ = 0), so with all 0s every θ works and the search
-falls to the floor. For example:
+NOT MEASURED: a plan whose search falls to THETA_FLOOR scores NaN. A
+score at the floor is not measured: the true θ may be below it, or not
+exist at all. This happens when every θ works, which needs 0s. A 0 takes
+θ out of that metric's constraint (θ * 0 = 0 and 0 / θ = 0). For
+example:
 
-    lower only, splits (0), (4)               ->  0.001, 0.001
-    (compactness, splits) (0, 0), (0.5, 4)    ->  0.001, 1
+    lower only, splits (0), (4)               ->  NaN, NaN
+    (compactness, splits) (0, 0), (0.5, 4)    ->  NaN, 1
+    higher only, compactness (0), (0.5)       ->  NaN, 1
 
-In both, the first plan should score 1. A score near 0 is right only
-when some blend that meets the plan's 0 limits has a higher metric above
-0. Higher-only (0), (0.5) is such a case. A plan with at least one
-value above 0 scores as usual.
+The 1st plan should score 1 in the first two examples and about 0 in
+the third. In the first, the 2nd plan should score about 0: a blend of
+0 splits beats 4 splits at every θ. One θ cannot tell 1 from 0 here, so
+the score is NaN, not a number that looks real when plans are ranked
+or averaged.
 """
+
+import math
 
 from pyomo.environ import (
     ConcreteModel,
@@ -115,8 +120,8 @@ NO_BLEND = {TerminationCondition.infeasible, TerminationCondition.unbounded}
 # The lowest θ the search tries. The search needs a range to start in. 1 is
 # known to work (a plan is its own blend), and this is assumed to fail: it
 # asks for 1,000 times the higher metrics and 1/1,000 of the lower ones. If
-# a plan could go lower still, the search never finds the edge, and the
-# plan scores about this (its exact θ is below it).
+# a plan could go lower still, the search never finds the edge, so the
+# plan scores NaN (see NOT MEASURED in the module docstring).
 THETA_FLOOR = 0.001
 
 # The search stops when the range of possible θ is this narrow. It returns
@@ -130,7 +135,8 @@ def calculate_radial_efficiency(higher_metrics, lower_metrics, current_row):
     `higher_metrics` and `lower_metrics` have one row per plan, in the same
     order. Their columns are the higher-is-better and lower-is-better
     metrics. `current_row` is the plan to score, counted from 1.
-    dea.score calls this once per plan.
+    dea.score calls this once per plan. Returns NaN when θ cannot be
+    measured (see NOT MEASURED in the module docstring).
 
     Raises ValueError for mismatched rows, no metrics, or values below 0
     (or blank), and RuntimeError if the solver fails for a reason other
@@ -271,6 +277,11 @@ def calculate_radial_efficiency(higher_metrics, lower_metrics, current_row):
             raise RuntimeError(
                 f"Plan {current_row} did not solve at theta={theta}: {condition}"
             )
+
+    # The search fell to the floor, so θ was not measured. Return NaN so
+    # the plan cannot pass for a real score.
+    if high <= THETA_FLOOR + TOLERANCE:
+        return math.nan
 
     # `high` is the smallest θ we saw a blend for, so it is the score.
     return high
