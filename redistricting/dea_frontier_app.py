@@ -8,7 +8,8 @@ A Dash app that scores plans with redistricting.DEA.slacks_based_measure:
   * for just the two metrics on the axes: the Pareto frontier plans as
     dark points joined by a dashed line, and its convex hull as
     a solid line, as in Gopalan et al. 2026, Figure 2
-  * a red x on each plan with DEA score 1 on all metrics
+  * a red x on each plan on the DEA frontier, which uses all metrics
+    together (DEA score 1)
   * optionally, the n plans closest to that frontier (highest DEA scores
     among the other plans) in blue, with a slider for n
   * click any plan to see its metrics, its percentile on each one, and
@@ -172,7 +173,7 @@ def build_figure(results, direction, names, id_col, x, y, n,
                      line=dict(color=MUTED, width=2, dash="dash"))
         fig.add_trace(front)
 
-    fig.add_trace(scatter(eff, f"DEA score 1 on all {len(direction)} metrics ({len(eff)})",
+    fig.add_trace(scatter(eff, f"DEA frontier, all {len(direction)} metrics ({len(eff)})",
                           FRONTIER, 8, "x", 1, outline=0))
 
     if selected is not None:
@@ -290,8 +291,9 @@ def create_app(
                "Dark points on the dashed line: the Pareto frontier for the "
                "two metrics shown (no plan beats them on both). Solid line: "
                "its convex hull. "
-               f"Red x: the {n_eff} of {len(results)} plans with DEA score 1 "
-               f"on all {len(cols)} metrics. An x can sit far from the lines, "
+               f"Red x: the {n_eff} of {len(results)} plans on the DEA frontier, "
+               f"which uses all {len(cols)} metrics together. An x can sit "
+               "far from the lines, "
                "because it is on the frontier through a metric not shown.",
                style={"color": MUTED, "margin": "0 0 16px", "maxWidth": "900px"}),
 
