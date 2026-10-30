@@ -31,12 +31,6 @@ Pass more than one Dataset to switch between them with the "Data" dropdown.
 "higher" or "lower", the same as score_plans.
 """
 
-# NOTES
-# get rid of this annotations statement
-# scale of plot should encompass entire set, even when subset is shown so it doesn't jump around
-
-from __future__ import annotations
-
 import hashlib
 import json
 from dataclasses import dataclass, field
@@ -157,6 +151,20 @@ def near_frontier(results: pd.DataFrame, n: int) -> pd.DataFrame:
     return results[~results["On_Frontier"]].nlargest(n, "DEA_Score")
 
 
+def axis_range(values: pd.Series, way: str, pad: float = 0.05) -> list[float]:
+    """Return [start, end] for an axis that fits every value.
+
+    `pad` adds that share of the span at each end, so points at the edge
+    aren't cut off. A "lower" axis runs from high to low, so better is
+    always up or to the right.
+    """
+    low, high = float(values.min()), float(values.max())
+    # with one distinct value, pad around it instead of by a span of 0
+    span = high - low or abs(high) or 1.0
+    start, end = low - pad * span, high + pad * span
+    return [start, end] if way == "higher" else [end, start]
+
+
 def fmt(v: float) -> str:
     """Format a metric value: whole numbers with commas, else 4 digits."""
     return f"{v:,.0f}" if float(v).is_integer() and abs(v) >= 1 else f"{v:.4g}"
@@ -234,14 +242,14 @@ def build_figure(results, direction, names, id_col, x, y, n,
                 marker=dict(size=24, symbol="circle-open", color=INK, line=dict(width=2)),
                 hoverinfo="skip", showlegend=False))
 
+    # Each axis spans every plan, even when some are hidden, so the chart
+    # keeps the same scale when "Show other plans" or n changes.
     def axis(col, title_suffix):
-        a = dict(title=dict(text=f"{names.get(col, col)}  {title_suffix}",
-                            font=dict(size=13, color=INK)),
-                 gridcolor=RULE, zeroline=False, linecolor=RULE,
-                 tickfont=dict(color=MUTED))
-        if direction[col] == "lower":
-            a["autorange"] = "reversed"   # lower is better -> flip so better is up/right
-        return a
+        return dict(title=dict(text=f"{names.get(col, col)}  {title_suffix}",
+                               font=dict(size=13, color=INK)),
+                    range=axis_range(results[col], direction[col]),
+                    gridcolor=RULE, zeroline=False, linecolor=RULE,
+                    tickfont=dict(color=MUTED))
 
     fig.update_layout(
         xaxis=axis(x, "(better →)"),
