@@ -7,7 +7,7 @@ mean-median difference, declination).
 
 ## Install
 
-From this folder, with the `gus8066` environment active:
+From this folder, with the `redistricting` environment active:
 
 ```powershell
 pip install -e ".[test]"
