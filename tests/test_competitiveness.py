@@ -18,7 +18,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from redistricting.competitiveness import competitive_districts, join_plans, read_plans
+from redistricting.competitiveness import (competitive_districts, join_plans, read_plans,
+                                           score_plan)
 
 
 def make_votes():
@@ -296,3 +297,10 @@ def test_plan_with_no_districts_raises():
     votes["plan_blank"] = float("nan")
     with pytest.raises(ValueError, match="no district has any votes"), pytest.warns(UserWarning, match="no district"):
         competitive_districts(votes)
+
+
+def test_score_plan():
+    # district 1: 50 of 1000 -> margin 0.05, counts     district 2: 52 of 1000 -> 0.052, does not
+    observed = score_plan([525, 526], [475, 474], [1, 2])
+    expected = {"competitive_districts": 1}
+    assert observed == expected

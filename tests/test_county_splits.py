@@ -23,8 +23,8 @@ import pandas as pd
 import pytest
 
 from redistricting.county_split import (all_metrics, county_hhi,
-                                        county_split_intersections, spill_ratio,
-                                        split_counties)
+                                        county_split_intersections, score_plan,
+                                        spill_ratio, split_counties)
 
 TOLERANCE = 1e-9
 
@@ -316,3 +316,14 @@ def test_precinct_with_no_district_warns_and_is_left_out():
     observed = value(result, "plan", "split_counties")
     expected = 0
     assert observed == expected
+
+
+def test_score_plan():
+    # A is cut 50/50, B is whole, C is cut 70/30
+    # split counties: A and C = 2     pieces in split counties: 2 + 2 = 4
+    # spill: 1 - (50 + 100 + 70) / 300 = 80 / 300
+    # hhi: (0.50 + 1.00 + 0.58) / 3
+    observed = score_plan(["A", "A", "B", "B", "C", "C"], [50, 50, 60, 40, 70, 30], [1, 2, 2, 2, 3, 2])
+    expected = {"split_counties": 2, "county_split_intersections": 4,
+                "spill_ratio": 80 / 300, "county_hhi": (0.50 + 1.00 + 0.58) / 3}
+    assert observed == pytest.approx(expected, abs=TOLERANCE)

@@ -10,7 +10,8 @@ Four metrics measure how a plan divides counties between districts:
 
 The first two count splits; the last two measure how many people the splits
 affect. Each metric has a public function, and ``all_metrics`` runs any
-combination of them at once.
+combination of them at once. ``score_plan`` scores one plan from separate
+columns, which is how the metrics GUI supplies its data.
 
 Input is one table with one row per precinct (or block):
 
@@ -496,3 +497,53 @@ def all_metrics(df, metrics=None, exclude=None, county="county", pop="pop"):
     if metrics is None:
         metrics = list(METRICS)
     return _score_plans(df, metrics, exclude, county, pop)
+
+
+def score_plan(county, pop, district, metrics=None):
+    """
+    Calculate county-splitting metrics for one plan from separate columns.
+
+    Parameters
+    ----------
+    county, pop, district : array-like
+        One value per precinct, in the same order: the precinct's county, its
+        population, and its district in this plan.
+    metrics : list of str, optional
+        Metrics to calculate, any of ``"split_counties"``,
+        ``"county_split_intersections"``, ``"spill_ratio"``, ``"county_hhi"``.
+        Defaults to all four.
+
+    Returns
+    -------
+    dict
+        ``{metric name: score}`` for the plan.
+
+    Raises
+    ------
+    ValueError
+        If the inputs differ in length, a county or population value is blank,
+        a metric name is unknown, or the plan has no population at all.
+
+    Notes
+    -----
+    This uses the same calculations as ``all_metrics``. See each metric's
+    function for its formula. A dict is the format the metrics GUI uses for
+    plan-wide numbers.
+
+    Examples
+    --------
+    In ``metrics_gui/metrics.py``:
+
+    >>> @metric("County splits", "Spill ratio", needs=["county", "population"])
+    ... def spill(ctx):
+    ...     return county_split.score_plan(ctx.column("county"), ctx.column("population"),
+    ...                                    ctx.district, metrics=["spill_ratio"])
+    """
+    county = pd.Series(county)
+    df = pd.DataFrame({
+        "cell_id": county.index.astype(str),
+        "county": county.values,
+        "pop": pd.Series(pop).values,
+        "plan": pd.Series(district).values,
+    })
+    return all_metrics(df, metrics).drop(columns="plan").to_dict("records")[0]

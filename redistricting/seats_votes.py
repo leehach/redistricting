@@ -9,6 +9,7 @@ are counted at each step:
     seats_votes_curve   seat share at each statewide vote share, per plan
     plot_seats_votes    chart of the curve, one line per plan
     seats_votes_app     Dash web app for choosing which plans to compare
+    score_plan          seats at chosen vote shares for one plan, as the metrics GUI uses it
 
 Input is one table with one row per precinct, the same shape the
 competitiveness module uses:
@@ -280,6 +281,62 @@ def seats_votes_curve(df, low=0.35, high=0.65, step=0.005, exclude=None, dem="de
                             "dem_seats": seats,
                             "dem_seat_share": seats / n_districts})
     return pd.DataFrame(results)
+
+
+def _one_plan_table(dem, rep, district):
+    """Build the input table for one plan from separate columns."""
+    dem = pd.Series(dem)
+    return pd.DataFrame({
+        "cell_id": dem.index.astype(str),
+        "dem": dem.values,
+        "rep": pd.Series(rep).values,
+        "plan": pd.Series(district).values,
+    })
+
+
+def score_plan(dem, rep, district, vote_shares=(0.45, 0.5, 0.55)):
+    """
+    Calculate Democratic seats at chosen statewide vote shares for one plan.
+
+    Parameters
+    ----------
+    dem, rep, district : array-like
+        One value per precinct, in the same order: Democratic votes, Republican
+        votes, and the precinct's district in this plan.
+    vote_shares : sequence of float, optional
+        Statewide Democratic vote shares to report. Defaults to 45%, 50% and 55%.
+
+    Returns
+    -------
+    dict
+        One entry per vote share, such as ``{"dem_seats_at_50pct": 2}``.
+
+    Raises
+    ------
+    ValueError
+        If a vote share is outside 0 to 1, the inputs differ in length, a vote
+        value is blank, or the plan has no district with votes.
+
+    Notes
+    -----
+    This summarizes the curve in plan-wide numbers, the format the metrics GUI
+    saves. Seats come from the same uniform swing as ``seats_votes_curve``; use
+    that function and ``seats_votes_app`` to see the whole curve.
+
+    Examples
+    --------
+    In ``metrics_gui/metrics.py``:
+
+    >>> @metric("Seats-votes", "Seats at 45%, 50% and 55%", needs=PARTISAN_NEEDS)
+    ... def seats(ctx):
+    ...     return seats_votes.score_plan(ctx.column("dem_votes"), ctx.column("rep_votes"),
+    ...                                   ctx.district)
+    """
+    if not all(0 <= share <= 1 for share in vote_shares):
+        raise ValueError("vote_shares must be between 0 and 1")
+    df = _prepare_df(_one_plan_table(dem, rep, district))
+    seats = _swing_seats(_district_totals(df, "plan"), vote_shares)
+    return {f"dem_seats_at_{share * 100:g}pct": count for share, count in zip(vote_shares, seats)}
 
 
 def plot_seats_votes(curve, plans=None):
