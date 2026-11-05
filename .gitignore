@@ -220,3 +220,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# Ignore everything in any folder named results
+results/
+
+# Or ignore only the CSVs in those folders
+results/**/*.csv
