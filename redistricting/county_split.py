@@ -26,10 +26,13 @@ References
 ----------
 Wachspress, J. and Adler, W. T. (2021). Split Decisions: Guidance for
 Measuring Locality Preservation in District Maps. Center for Democracy &
-Technology. https://github.com/jacobwachspress/locality-splitting
+Technology. https://cdt.org/insights/report-split-decisions-guidance-for-measuring-locality-preservation-in-district-maps/
+Code: https://github.com/jacobwachspress/locality-splitting
 
-Waggoner, P. D. (2018). hhi: Calculate and Visualize the
-Herfindahl-Hirschman Index. https://github.com/pdwaggoner/hhi
+Waggoner, P. D. (2018). The hhi Package: Streamlined Calculation and
+Visualization of Herfindahl-Hirschman Index Scores. Journal of Open Source
+Software, 3(28), 828. https://doi.org/10.21105/joss.00828
+Code: https://github.com/pdwaggoner/hhi
 
 Herfindahl-Hirschman index. Wikipedia.
 https://en.wikipedia.org/wiki/Herfindahl%E2%80%93Hirschman_index
@@ -72,9 +75,41 @@ def _prepare_df(df):
     return df
 
 
-def _plan_columns(df):
-    """List the plan columns: every column that is not an id, county, or pop column."""
-    return [col for col in df.columns if col not in INFO_COLUMNS]
+def _plan_columns(df, exclude=None):
+    """
+    List the plan columns in the input table.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input table, after ``_prepare_df``.
+    exclude : str or list of str, optional
+        Columns that are not plans, such as ``district_name`` or ``area``.
+        ``cell_id``, ``county``, and ``pop`` are always left out, so they do
+        not need to be listed.
+
+    Returns
+    -------
+    list of str
+        Names of the plan columns, in the order they appear in ``df``.
+
+    Raises
+    ------
+    ValueError
+        If ``exclude`` names a column that is not in ``df``.
+    """
+    if exclude is None:
+        exclude = []
+    elif isinstance(exclude, str):
+        exclude = [exclude]
+
+    # a misspelled name would leave the real column in as a plan
+    missing = [col for col in exclude if col not in df.columns]
+    if missing:
+        raise ValueError(f"exclude names column(s) not in df: {', '.join(missing)}")
+
+    non_plan = INFO_COLUMNS + list(exclude)
+    return [col for col in df.columns if col not in non_plan]
 
 
 def _county_district_pop(df, plan):
@@ -132,7 +167,7 @@ METRICS = {
 }
 
 
-def _score_plans(df, metric_names):
+def _score_plans(df, metric_names, exclude=None):
     """Run the named metrics on every plan; return one row per plan."""
     unknown = [name for name in metric_names if name not in METRICS]
     if unknown:
@@ -140,7 +175,7 @@ def _score_plans(df, metric_names):
 
     df = _prepare_df(df)
     results = []
-    for plan in _plan_columns(df):
+    for plan in _plan_columns(df, exclude):
         pieces = _county_district_pop(df, plan)
         row = {"plan": plan}
         for name in metric_names:
@@ -153,7 +188,7 @@ def _score_plans(df, metric_names):
 # Public functions
 # ---------------------------------------------------------------------------
 
-def split_counties(df):
+def split_counties(df, exclude=None):
     """
     Calculate the number of split counties for each plan.
 
@@ -163,6 +198,10 @@ def split_counties(df):
         First column contains precinct ids. Must include ``county`` and
         ``pop`` columns. All other columns are plans, with values indicating
         district assignments.
+    exclude : str or list of str, optional
+        Columns that are not plans, such as ``district_name`` or ``area``.
+        The id, ``county``, ``pop``, and geometry columns are always left
+        out.
 
     Returns
     -------
@@ -185,10 +224,10 @@ def split_counties(df):
     ``splits_pop`` in the locality-splitting package (Wachspress and Adler
     2021).
     """
-    return _score_plans(df, ["split_counties"])
+    return _score_plans(df, ["split_counties"], exclude)
 
 
-def county_split_intersections(df):
+def county_split_intersections(df, exclude=None):
     """
     Calculate the number of district pieces within split counties for each plan.
 
@@ -198,6 +237,10 @@ def county_split_intersections(df):
         First column contains precinct ids. Must include ``county`` and
         ``pop`` columns. All other columns are plans, with values indicating
         district assignments.
+    exclude : str or list of str, optional
+        Columns that are not plans, such as ``district_name`` or ``area``.
+        The id, ``county``, ``pop``, and geometry columns are always left
+        out.
 
     Returns
     -------
@@ -219,10 +262,10 @@ def county_split_intersections(df):
     locality-splitting package (Wachspress and Adler 2021), which also counts
     each whole county as 1 piece. Precincts with no population are ignored.
     """
-    return _score_plans(df, ["county_split_intersections"])
+    return _score_plans(df, ["county_split_intersections"], exclude)
 
 
-def spill_ratio(df):
+def spill_ratio(df, exclude=None):
     """
     Calculate the spill ratio for each plan: the share of people who live
     outside their county's largest district piece.
@@ -233,6 +276,10 @@ def spill_ratio(df):
         First column contains precinct ids. Must include ``county`` and
         ``pop`` columns. All other columns are plans, with values indicating
         district assignments.
+    exclude : str or list of str, optional
+        Columns that are not plans, such as ``district_name`` or ``area``.
+        The id, ``county``, ``pop``, and geometry columns are always left
+        out.
 
     Returns
     -------
@@ -260,10 +307,10 @@ def spill_ratio(df):
     from official figures. Built from the county-district population table
     described by Wachspress and Adler (2021).
     """
-    return _score_plans(df, ["spill_ratio"])
+    return _score_plans(df, ["spill_ratio"], exclude)
 
 
-def county_hhi(df):
+def county_hhi(df, exclude=None):
     """
     Calculate the county Herfindahl index for each plan: how concentrated
     each county's population is within a single district.
@@ -274,6 +321,10 @@ def county_hhi(df):
         First column contains precinct ids. Must include ``county`` and
         ``pop`` columns. All other columns are plans, with values indicating
         district assignments.
+    exclude : str or list of str, optional
+        Columns that are not plans, such as ``district_name`` or ``area``.
+        The id, ``county``, ``pop``, and geometry columns are always left
+        out.
 
     Returns
     -------
@@ -299,10 +350,10 @@ def county_hhi(df):
     splits in the locality-splitting package by :math:`ES_c = 1 / HHI_c - 1`.
     Weighting county scores by population is our choice.
     """
-    return _score_plans(df, ["county_hhi"])
+    return _score_plans(df, ["county_hhi"], exclude)
 
 
-def all_metrics(df, metrics=None):
+def all_metrics(df, metrics=None, exclude=None):
     """
     Calculate several county-splitting metrics for every plan at once.
 
@@ -316,6 +367,10 @@ def all_metrics(df, metrics=None):
         Metrics to calculate, any of ``"split_counties"``,
         ``"county_split_intersections"``, ``"spill_ratio"``, ``"county_hhi"``.
         Defaults to all four.
+    exclude : str or list of str, optional
+        Columns that are not plans, such as ``district_name`` or ``area``.
+        The id, ``county``, ``pop``, and geometry columns are always left
+        out.
 
     Returns
     -------
@@ -336,4 +391,4 @@ def all_metrics(df, metrics=None):
     """
     if metrics is None:
         metrics = list(METRICS)
-    return _score_plans(df, metrics)
+    return _score_plans(df, metrics, exclude)
