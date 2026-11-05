@@ -4,14 +4,16 @@ channels:
 dependencies:
   - python
   # required
-  - pyomo
-  - pandas
-  - glpk
-  - pysal
-  - shapely
-  - geopandas
   - dash
+  - esda
+  - geopandas
+  - glpk
+  - matplotlib
+  - numpy
+  - pandas
   - plotly
+  - pyomo
+  - shapely
   # optional, testing, etc.
   - pytest
   # docs
