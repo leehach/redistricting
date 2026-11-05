@@ -12,7 +12,6 @@ dependencies:
   - pyomo
   - pandas
   - shapely
-  - warnings
   # optional, testing, etc.
   - pytest
   # docs
