@@ -241,3 +241,78 @@ def test_without_exclude_extra_column_is_scored_as_plan():
     observed = split_counties(plans)["plan"].tolist()
     expected = ["plan_whole", "plan_split", "area"]
     assert observed == expected
+
+
+# ---------------------------------------------------------------------------
+# Input checks and new options
+# ---------------------------------------------------------------------------
+
+def test_exclude_can_list_id_column():
+    observed = all_metrics(make_plans(), exclude=["precinct_id"])["plan"].tolist()
+    expected = ["plan_whole", "plan_split"]
+    assert observed == expected
+
+
+def test_exclude_can_list_geometry_column():
+    plans = make_plans()
+    plans["geometry"] = None
+    observed = all_metrics(plans, exclude=["geometry"])["plan"].tolist()
+    expected = ["plan_whole", "plan_split"]
+    assert observed == expected
+
+
+@pytest.mark.parametrize("func", [split_counties, county_split_intersections,
+                                  spill_ratio, county_hhi, all_metrics])
+def test_other_column_names_work_in_every_function(func):
+    plans = make_plans().rename(columns={"county": "CNTY", "pop": "TotPop"})
+    observed = func(plans, county="CNTY", pop="TotPop")
+    expected = func(make_plans())
+    assert observed.equals(expected)
+
+
+def test_missing_column_raises():
+    plans = make_plans().rename(columns={"pop": "TotPop"})
+    with pytest.raises(ValueError, match="pop"):
+        all_metrics(plans)
+
+
+def test_chosen_name_clashing_with_existing_column_raises():
+    plans = make_plans()
+    plans["TotPop"] = plans["pop"]
+    with pytest.raises(ValueError, match="already has"):
+        all_metrics(plans, pop="TotPop")
+
+
+def test_blank_population_raises():
+    plans = make_plans().astype({"pop": float})
+    plans.loc[0, "pop"] = float("nan")
+    with pytest.raises(ValueError, match="blank population"):
+        all_metrics(plans)
+
+
+def test_blank_county_raises():
+    plans = make_plans()
+    plans.loc[0, "county"] = None
+    with pytest.raises(ValueError, match="blank county"):
+        all_metrics(plans)
+
+
+def test_plan_with_no_population_raises():
+    plans = pd.DataFrame({"precinct_id": ["x1"], "county": ["X"], "pop": [0], "plan": [1]})
+    with pytest.raises(ValueError, match="no county-district piece"), pytest.warns(UserWarning, match="no population"):
+        all_metrics(plans)
+
+
+def test_precinct_with_no_district_warns_and_is_left_out():
+    # the 90-person precinct has no district, so only 10 people are scored
+    plans = pd.DataFrame({
+        "precinct_id": ["x1", "x2"],
+        "county":      ["X", "X"],
+        "pop":         [10, 90],
+        "plan":        [1, None],
+    })
+    with pytest.warns(UserWarning, match="no district"):
+        result = split_counties(plans)
+    observed = value(result, "plan", "split_counties")
+    expected = 0
+    assert observed == expected

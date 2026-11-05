@@ -19,8 +19,9 @@ Input is one table with one row per precinct (or block):
     42001000002  42001   850   23       23
 
 The first column is the precinct id (any name). ``county`` and ``pop`` are
-found by name. Every other column is a plan, with district assignments as
-values. A GeoDataFrame also works; its geometry column is ignored.
+the default names for the county and population columns; the ``county`` and
+``pop`` arguments change them. Every other column is a plan, with district
+assignments as values. A GeoDataFrame also works; its geometry column is ignored.
 
 References
 ----------
@@ -50,23 +51,44 @@ INFO_COLUMNS = ["cell_id", "county", "pop", "geometry"]
 # Data prep (private)
 # ---------------------------------------------------------------------------
 
-def _prepare_df(df):
+def _prepare_df(df, county="county", pop="pop"):
     """
     Standardize the input table and note any empty precincts.
 
-    Renames the first column to ``cell_id``, drops a geometry column if one is
-    present, and sets ``county`` to text and ``pop`` to numbers. Precincts
-    with no population are listed in a warning; they add nothing to any
-    metric.
+    Renames the first column to ``cell_id`` and the data columns to ``county``
+    and ``pop``, drops a geometry column if one is present, and sets ``county``
+    to text and ``pop`` to numbers. Precincts with a population of 0 are listed
+    in a warning; they add nothing to any metric.
+
+    A blank county or population cell raises a ValueError. A blank may mean
+    missing data rather than no people, so the analyst enters 0 for an empty
+    precinct. This matches ``population_deviation``, which raises on a blank
+    population.
     """
+    missing = [col for col in (county, pop) if col not in df.columns]
+    if missing:
+        raise ValueError(f"column(s) not in df: {', '.join(missing)}")
+    taken = [new for old, new in ((county, "county"), (pop, "pop")) if old != new and new in df.columns]
+    if taken:
+        raise ValueError(f"df already has column(s) named {', '.join(taken)}; "
+                         "exclude or rename them before choosing other columns")
+
     # copy so the caller's table is not altered
     df = pd.DataFrame(df).copy()
-    df = df.rename(columns={df.columns[0]: "cell_id"})
+    df = df.rename(columns={df.columns[0]: "cell_id", county: "county", pop: "pop"})
     df = df.drop(columns="geometry", errors="ignore")
-
     df["cell_id"] = df["cell_id"].astype(str)
+
+    blank = df.loc[df["county"].isna(), "cell_id"].tolist()
+    if blank:
+        raise ValueError(f"{len(blank)} precinct(s) have a blank county cell: {blank[:10]}")
     df["county"] = df["county"].astype(str)
-    df["pop"] = df["pop"].fillna(0).astype(float)
+
+    df["pop"] = pd.to_numeric(df["pop"]).astype(float)
+    blank = df.loc[df["pop"].isna(), "cell_id"].tolist()
+    if blank:
+        raise ValueError(f"{len(blank)} precinct(s) have a blank population cell: {blank[:10]}. "
+                         "Enter 0 for a precinct with no people.")
 
     empty = df.loc[df["pop"] == 0, "cell_id"].tolist()
     if empty:
@@ -75,23 +97,24 @@ def _prepare_df(df):
     return df
 
 
-def _plan_columns(df, exclude=None):
+def _check_exclude(df, exclude):
     """
-    List the plan columns in the input table.
+    Check the ``exclude`` argument against the input table.
+
+    Runs before any columns are renamed or dropped, so any column in the
+    caller's table can be listed, including the id and geometry columns.
 
     Parameters
     ----------
-    df : pandas.DataFrame
-        Input table, after ``_prepare_df``.
-    exclude : str or list of str, optional
-        Columns that are not plans, such as ``district_name`` or ``area``.
-        ``cell_id``, ``county``, and ``pop`` are always left out, so they do
-        not need to be listed.
+    df : pandas.DataFrame or geopandas.GeoDataFrame
+        Input table, as the caller passed it.
+    exclude : str or list of str or None
+        Columns that are not plans.
 
     Returns
     -------
     list of str
-        Names of the plan columns, in the order they appear in ``df``.
+        The excluded column names.
 
     Raises
     ------
@@ -99,16 +122,36 @@ def _plan_columns(df, exclude=None):
         If ``exclude`` names a column that is not in ``df``.
     """
     if exclude is None:
-        exclude = []
-    elif isinstance(exclude, str):
+        return []
+    if isinstance(exclude, str):
         exclude = [exclude]
 
     # a misspelled name would leave the real column in as a plan
     missing = [col for col in exclude if col not in df.columns]
     if missing:
         raise ValueError(f"exclude names column(s) not in df: {', '.join(missing)}")
+    return list(exclude)
 
-    non_plan = INFO_COLUMNS + list(exclude)
+
+def _plan_columns(df, exclude):
+    """
+    List the plan columns in the input table.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input table, after ``_prepare_df``.
+    exclude : list of str
+        Columns that are not plans, from ``_check_exclude``. ``cell_id``,
+        ``county``, and ``pop`` are always left out, so they do not need to be
+        listed.
+
+    Returns
+    -------
+    list of str
+        Names of the plan columns, in the order they appear in ``df``.
+    """
+    non_plan = INFO_COLUMNS + exclude
     return [col for col in df.columns if col not in non_plan]
 
 
@@ -117,13 +160,23 @@ def _county_district_pop(df, plan):
     Population of every county-district piece for one plan.
 
     Pieces with no population are dropped, so a district line that only
-    crosses empty precincts does not count as a split.
+    crosses empty precincts does not count as a split. Precincts with no
+    district are left out with a warning.
 
     Returns a DataFrame with columns: county, district, pop.
     """
     plan_df = df[["county", plan, "pop"]].rename(columns={plan: "district"})
+
+    # groupby skips blank districts, so say how many precincts that leaves out
+    missing = int(plan_df["district"].isna().sum())
+    if missing:
+        warnings.warn(f"{plan}: left out {missing} precinct(s) with no district")
     pieces = plan_df.groupby(["county", "district"], as_index=False)["pop"].sum()
-    return pieces[pieces["pop"] > 0]
+
+    pieces = pieces[pieces["pop"] > 0]
+    if pieces.empty:
+        raise ValueError(f"{plan}: no county-district piece has any population")
+    return pieces
 
 
 # ---------------------------------------------------------------------------
@@ -167,13 +220,14 @@ METRICS = {
 }
 
 
-def _score_plans(df, metric_names, exclude=None):
+def _score_plans(df, metric_names, exclude=None, county="county", pop="pop"):
     """Run the named metrics on every plan; return one row per plan."""
     unknown = [name for name in metric_names if name not in METRICS]
     if unknown:
         raise ValueError(f"Unknown metric(s) {unknown}. Choose from {list(METRICS)}")
 
-    df = _prepare_df(df)
+    exclude = _check_exclude(df, exclude)
+    df = _prepare_df(df, county, pop)
     results = []
     for plan in _plan_columns(df, exclude):
         pieces = _county_district_pop(df, plan)
@@ -188,25 +242,35 @@ def _score_plans(df, metric_names, exclude=None):
 # Public functions
 # ---------------------------------------------------------------------------
 
-def split_counties(df, exclude=None):
+def split_counties(df, exclude=None, county="county", pop="pop"):
     """
     Calculate the number of split counties for each plan.
 
     Parameters
     ----------
     df : pandas.DataFrame or geopandas.GeoDataFrame
-        First column contains precinct ids. Must include ``county`` and
-        ``pop`` columns. All other columns are plans, with values indicating
-        district assignments.
+        First column contains precinct ids. Must include county and
+        population columns. All other columns are plans, with values
+        indicating district assignments.
     exclude : str or list of str, optional
         Columns that are not plans, such as ``district_name`` or ``area``.
         The id, ``county``, ``pop``, and geometry columns are always left
         out.
+    county, pop : str, optional
+        Names of the county and population columns. Default to ``county`` and
+        ``pop``.
 
     Returns
     -------
     pandas.DataFrame
         One row per plan with columns ``plan`` and ``split_counties``.
+
+    Raises
+    ------
+    ValueError
+        If a county or population column is missing or has a blank cell,
+        ``exclude`` names a column that is not in ``df``, or a plan has no
+        population at all.
 
     Notes
     -----
@@ -224,28 +288,38 @@ def split_counties(df, exclude=None):
     ``splits_pop`` in the locality-splitting package (Wachspress and Adler
     2021).
     """
-    return _score_plans(df, ["split_counties"], exclude)
+    return _score_plans(df, ["split_counties"], exclude, county, pop)
 
 
-def county_split_intersections(df, exclude=None):
+def county_split_intersections(df, exclude=None, county="county", pop="pop"):
     """
     Calculate the number of district pieces within split counties for each plan.
 
     Parameters
     ----------
     df : pandas.DataFrame or geopandas.GeoDataFrame
-        First column contains precinct ids. Must include ``county`` and
-        ``pop`` columns. All other columns are plans, with values indicating
-        district assignments.
+        First column contains precinct ids. Must include county and
+        population columns. All other columns are plans, with values
+        indicating district assignments.
     exclude : str or list of str, optional
         Columns that are not plans, such as ``district_name`` or ``area``.
         The id, ``county``, ``pop``, and geometry columns are always left
         out.
+    county, pop : str, optional
+        Names of the county and population columns. Default to ``county`` and
+        ``pop``.
 
     Returns
     -------
     pandas.DataFrame
         One row per plan with columns ``plan`` and ``county_split_intersections``.
+
+    Raises
+    ------
+    ValueError
+        If a county or population column is missing or has a blank cell,
+        ``exclude`` names a column that is not in ``df``, or a plan has no
+        population at all.
 
     Notes
     -----
@@ -262,10 +336,10 @@ def county_split_intersections(df, exclude=None):
     locality-splitting package (Wachspress and Adler 2021), which also counts
     each whole county as 1 piece. Precincts with no population are ignored.
     """
-    return _score_plans(df, ["county_split_intersections"], exclude)
+    return _score_plans(df, ["county_split_intersections"], exclude, county, pop)
 
 
-def spill_ratio(df, exclude=None):
+def spill_ratio(df, exclude=None, county="county", pop="pop"):
     """
     Calculate the spill ratio for each plan: the share of people who live
     outside their county's largest district piece.
@@ -273,13 +347,16 @@ def spill_ratio(df, exclude=None):
     Parameters
     ----------
     df : pandas.DataFrame or geopandas.GeoDataFrame
-        First column contains precinct ids. Must include ``county`` and
-        ``pop`` columns. All other columns are plans, with values indicating
-        district assignments.
+        First column contains precinct ids. Must include county and
+        population columns. All other columns are plans, with values
+        indicating district assignments.
     exclude : str or list of str, optional
         Columns that are not plans, such as ``district_name`` or ``area``.
         The id, ``county``, ``pop``, and geometry columns are always left
         out.
+    county, pop : str, optional
+        Names of the county and population columns. Default to ``county`` and
+        ``pop``.
 
     Returns
     -------
@@ -287,6 +364,13 @@ def spill_ratio(df, exclude=None):
         One row per plan with columns ``plan`` and ``spill_ratio``. 0 means no
         county is split; higher values mean more people are separated from
         the rest of their county.
+
+    Raises
+    ------
+    ValueError
+        If a county or population column is missing or has a blank cell,
+        ``exclude`` names a column that is not in ``df``, or a plan has no
+        population at all.
 
     Notes
     -----
@@ -307,10 +391,10 @@ def spill_ratio(df, exclude=None):
     from official figures. Built from the county-district population table
     described by Wachspress and Adler (2021).
     """
-    return _score_plans(df, ["spill_ratio"], exclude)
+    return _score_plans(df, ["spill_ratio"], exclude, county, pop)
 
 
-def county_hhi(df, exclude=None):
+def county_hhi(df, exclude=None, county="county", pop="pop"):
     """
     Calculate the county Herfindahl index for each plan: how concentrated
     each county's population is within a single district.
@@ -318,13 +402,16 @@ def county_hhi(df, exclude=None):
     Parameters
     ----------
     df : pandas.DataFrame or geopandas.GeoDataFrame
-        First column contains precinct ids. Must include ``county`` and
-        ``pop`` columns. All other columns are plans, with values indicating
-        district assignments.
+        First column contains precinct ids. Must include county and
+        population columns. All other columns are plans, with values
+        indicating district assignments.
     exclude : str or list of str, optional
         Columns that are not plans, such as ``district_name`` or ``area``.
         The id, ``county``, ``pop``, and geometry columns are always left
         out.
+    county, pop : str, optional
+        Names of the county and population columns. Default to ``county`` and
+        ``pop``.
 
     Returns
     -------
@@ -332,6 +419,13 @@ def county_hhi(df, exclude=None):
         One row per plan with columns ``plan`` and ``county_hhi``. 1 means no
         county is split; lower values mean county populations are spread
         across more districts.
+
+    Raises
+    ------
+    ValueError
+        If a county or population column is missing or has a blank cell,
+        ``exclude`` names a column that is not in ``df``, or a plan has no
+        population at all.
 
     Notes
     -----
@@ -350,19 +444,19 @@ def county_hhi(df, exclude=None):
     splits in the locality-splitting package by :math:`ES_c = 1 / HHI_c - 1`.
     Weighting county scores by population is our choice.
     """
-    return _score_plans(df, ["county_hhi"], exclude)
+    return _score_plans(df, ["county_hhi"], exclude, county, pop)
 
 
-def all_metrics(df, metrics=None, exclude=None):
+def all_metrics(df, metrics=None, exclude=None, county="county", pop="pop"):
     """
     Calculate several county-splitting metrics for every plan at once.
 
     Parameters
     ----------
     df : pandas.DataFrame or geopandas.GeoDataFrame
-        First column contains precinct ids. Must include ``county`` and
-        ``pop`` columns. All other columns are plans, with values indicating
-        district assignments.
+        First column contains precinct ids. Must include county and
+        population columns. All other columns are plans, with values
+        indicating district assignments.
     metrics : list of str, optional
         Metrics to calculate, any of ``"split_counties"``,
         ``"county_split_intersections"``, ``"spill_ratio"``, ``"county_hhi"``.
@@ -371,11 +465,21 @@ def all_metrics(df, metrics=None, exclude=None):
         Columns that are not plans, such as ``district_name`` or ``area``.
         The id, ``county``, ``pop``, and geometry columns are always left
         out.
+    county, pop : str, optional
+        Names of the county and population columns. Default to ``county`` and
+        ``pop``.
 
     Returns
     -------
     pandas.DataFrame
         One row per plan with a ``plan`` column and one column per metric.
+
+    Raises
+    ------
+    ValueError
+        If a county or population column is missing or has a blank cell,
+        ``exclude`` names a column that is not in ``df``, or a plan has no
+        population at all.
 
     Notes
     -----
@@ -391,4 +495,4 @@ def all_metrics(df, metrics=None, exclude=None):
     """
     if metrics is None:
         metrics = list(METRICS)
-    return _score_plans(df, metrics, exclude)
+    return _score_plans(df, metrics, exclude, county, pop)

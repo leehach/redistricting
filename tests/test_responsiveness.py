@@ -146,3 +146,55 @@ def test_without_exclude_extra_column_is_scored_as_plan():
     observed = responsiveness(votes)["plan"].tolist()
     expected = ["plan_a", "plan_b", "area"]
     assert observed == expected
+
+
+# ---------------------------------------------------------------------------
+# Input checks and new options
+# ---------------------------------------------------------------------------
+
+def test_exclude_can_list_id_column():
+    observed = responsiveness(make_votes(), exclude=["precinct_id"])["plan"].unique().tolist()
+    expected = ["plan_a", "plan_b"]
+    assert observed == expected
+
+
+def test_exclude_can_list_geometry_column():
+    votes = make_votes()
+    votes["geometry"] = None
+    observed = responsiveness(votes, exclude=["geometry"])["plan"].unique().tolist()
+    expected = ["plan_a", "plan_b"]
+    assert observed == expected
+
+
+def test_other_vote_column_names_give_same_result():
+    votes = make_votes().rename(columns={"dem": "D_votes", "rep": "R_votes"})
+    observed = responsiveness(votes, dem="D_votes", rep="R_votes")
+    expected = responsiveness(make_votes())
+    assert observed.equals(expected)
+
+
+def test_missing_vote_column_raises():
+    votes = make_votes().rename(columns={"dem": "D_votes"})
+    with pytest.raises(ValueError, match="dem"):
+        responsiveness(votes)
+
+
+def test_chosen_name_clashing_with_existing_column_raises():
+    votes = make_votes()
+    votes["D_votes"] = votes["dem"]
+    with pytest.raises(ValueError, match="already has"):
+        responsiveness(votes, dem="D_votes")
+
+
+def test_blank_vote_cell_raises():
+    votes = make_votes().astype({"dem": float})
+    votes.loc[0, "dem"] = float("nan")
+    with pytest.raises(ValueError, match="blank dem"):
+        responsiveness(votes)
+
+
+def test_plan_with_no_districts_raises():
+    votes = make_votes()
+    votes["plan_blank"] = float("nan")
+    with pytest.raises(ValueError, match="no district has any votes"), pytest.warns(UserWarning, match="no district"):
+        responsiveness(votes)

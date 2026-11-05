@@ -18,8 +18,8 @@ competitiveness module uses:
     42001000100  390  350  33      13
 
 The first column is the precinct id (any name). ``dem`` and ``rep`` are vote
-counts for the two leading candidates, found by name. Every other column is a
-plan, with district assignments as values. A GeoDataFrame also works; its
+counts for the two leading candidates; use the ``dem`` and ``rep`` arguments if
+your columns have other names. Every other column is a plan, with district assignments as values. A GeoDataFrame also works; its
 geometry column is ignored.
 
 The chart functions need ``plotly`` and ``dash``. They are imported inside those
@@ -53,45 +53,64 @@ INFO_COLUMNS = ["cell_id", "dem", "rep", "total", "geometry"]
 # Data prep (private)
 # ---------------------------------------------------------------------------
 
-def _prepare_df(df):
+def _prepare_df(df, dem="dem", rep="rep"):
     """
     Standardize the input table.
 
-    Renames the first column to ``cell_id``, drops a geometry column if one is
-    present, sets ``dem`` and ``rep`` to numbers, and adds a two-party
-    ``total`` column (``dem + rep``), replacing any existing ``total``.
+    Renames the first column to ``cell_id`` and the vote columns to ``dem`` and
+    ``rep``, drops a geometry column if one is present, sets the vote columns to
+    numbers, and adds a two-party ``total`` column (``dem + rep``), replacing
+    any existing ``total``.
+
+    A blank vote cell raises a ValueError instead of counting as 0. A blank may
+    mean missing data rather than no votes, and treating it as 0 can change a
+    result, so the analyst enters 0 where no votes were cast. This matches
+    ``population_deviation``, which raises on a blank population.
     """
+    missing = [col for col in (dem, rep) if col not in df.columns]
+    if missing:
+        raise ValueError(f"vote column(s) not in df: {', '.join(missing)}")
+    taken = [new for old, new in ((dem, "dem"), (rep, "rep")) if old != new and new in df.columns]
+    if taken:
+        raise ValueError(f"df already has column(s) named {', '.join(taken)}; "
+                         "exclude or rename them before choosing other vote columns")
+
     # copy so the caller's table is not altered
     df = pd.DataFrame(df).copy()
-    df = df.rename(columns={df.columns[0]: "cell_id"})
+    df = df.rename(columns={df.columns[0]: "cell_id", dem: "dem", rep: "rep"})
     df = df.drop(columns="geometry", errors="ignore")
+    df["cell_id"] = df["cell_id"].astype(str)
 
     for col in ["dem", "rep"]:
-        df[col] = pd.to_numeric(df[col]).fillna(0).astype(float)
+        df[col] = pd.to_numeric(df[col]).astype(float)
+        blank = df.loc[df[col].isna(), "cell_id"].tolist()
+        if blank:
+            raise ValueError(f"{len(blank)} precinct(s) have a blank {col} cell: {blank[:10]}. "
+                             "Enter 0 if no votes were cast.")
     # two-party total: denominator is dem + rep, not all votes cast
     df["total"] = df["dem"] + df["rep"]
-    df["cell_id"] = df["cell_id"].astype(str)
 
     return df
 
 
-def _plan_columns(df, exclude=None):
+def _check_exclude(df, exclude):
     """
-    List the plan columns in the input table.
+    Check the ``exclude`` argument against the input table.
+
+    Runs before any columns are renamed or dropped, so any column in the
+    caller's table can be listed, including the id and geometry columns.
 
     Parameters
     ----------
-    df : pandas.DataFrame
-        Input table, after ``_prepare_df``.
-    exclude : str or list of str, optional
-        Columns that are not plans, such as ``county`` or ``area``.
-        ``cell_id``, ``dem``, ``rep``, and ``total`` are always left out, so
-        they do not need to be listed.
+    df : pandas.DataFrame or geopandas.GeoDataFrame
+        Input table, as the caller passed it.
+    exclude : str or list of str or None
+        Columns that are not plans.
 
     Returns
     -------
     list of str
-        Names of the plan columns, in the order they appear in ``df``.
+        The excluded column names.
 
     Raises
     ------
@@ -99,16 +118,36 @@ def _plan_columns(df, exclude=None):
         If ``exclude`` names a column that is not in ``df``.
     """
     if exclude is None:
-        exclude = []
-    elif isinstance(exclude, str):
+        return []
+    if isinstance(exclude, str):
         exclude = [exclude]
 
     # a misspelled name would leave the real column in as a plan
     missing = [col for col in exclude if col not in df.columns]
     if missing:
         raise ValueError(f"exclude names column(s) not in df: {', '.join(missing)}")
+    return list(exclude)
 
-    non_plan = INFO_COLUMNS + list(exclude)
+
+def _plan_columns(df, exclude):
+    """
+    List the plan columns in the input table.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Input table, after ``_prepare_df``.
+    exclude : list of str
+        Columns that are not plans, from ``_check_exclude``. ``cell_id``,
+        ``dem``, ``rep``, and ``total`` are always left out, so they do not need
+        to be listed.
+
+    Returns
+    -------
+    list of str
+        Names of the plan columns, in the order they appear in ``df``.
+    """
+    non_plan = INFO_COLUMNS + exclude
     return [col for col in df.columns if col not in non_plan]
 
 
@@ -130,7 +169,10 @@ def _district_totals(df, plan):
     if empty:
         warnings.warn(f"{plan}: left out {len(empty)} district(s) with no votes: "
                       f"{', '.join(empty)}")
-    return totals[totals["total"] > 0]
+    totals = totals[totals["total"] > 0]
+    if totals.empty:
+        raise ValueError(f"{plan}: no district has any votes")
+    return totals
 
 
 # ---------------------------------------------------------------------------
@@ -159,31 +201,40 @@ def _swing_seats(district_totals, targets):
 # Public functions
 # ---------------------------------------------------------------------------
 
-def seats_votes_curve(df, low=0.35, high=0.65, step=0.005, exclude=None):
+def seats_votes_curve(df, low=0.35, high=0.65, step=0.005, exclude=None, dem="dem", rep="rep"):
     """
     Calculate the seats-votes curve for each plan.
 
     Parameters
     ----------
     df : pandas.DataFrame or geopandas.GeoDataFrame
-        First column contains precinct ids. Must include ``dem`` and ``rep``
-        vote columns. All other columns are plans, with values indicating
-        district assignments.
+        First column contains precinct ids. Must include Democratic and
+        Republican vote columns. All other columns are plans, with values
+        indicating district assignments.
     low, high : float, optional
         Range of statewide Democratic vote shares to cover. Defaults to 0.35
         and 0.65.
     step : float, optional
         Distance between vote shares. Defaults to 0.005 (half a percentage
-        point).
+        point). Must divide the range from ``low`` to ``high`` evenly.
     exclude : str or list of str, optional
         Columns that are not plans, such as ``county`` or ``area``. The id,
         ``dem``, ``rep``, and geometry columns are always left out.
+    dem, rep : str, optional
+        Names of the Democratic and Republican vote columns. Default to ``dem``
+        and ``rep``.
 
     Returns
     -------
     pandas.DataFrame
         One row per plan per vote share, with columns ``plan``,
         ``dem_vote_share``, ``dem_seats``, and ``dem_seat_share``.
+
+    Raises
+    ------
+    ValueError
+        If the range or step is invalid, a vote column is missing or has a blank cell, ``exclude`` names a
+        column that is not in ``df``, or a plan has no district with votes.
 
     Notes
     -----
@@ -208,11 +259,17 @@ def seats_votes_curve(df, low=0.35, high=0.65, step=0.005, exclude=None):
     if step <= 0:
         raise ValueError("step must be above 0")
 
+    # a step that doesn't fit the range would otherwise be changed without notice
+    steps = (high - low) / step
+    if abs(steps - round(steps)) > 1e-9:
+        raise ValueError("step must divide the range from low to high evenly")
+
     # linspace, not arange, so the last share is exactly `high`
-    n = int(round((high - low) / step)) + 1
+    n = int(round(steps)) + 1
     targets = np.round(np.linspace(low, high, n), 6)
 
-    df = _prepare_df(df)
+    exclude = _check_exclude(df, exclude)
+    df = _prepare_df(df, dem, rep)
     results = []
     for plan in _plan_columns(df, exclude):
         district_totals = _district_totals(df, plan)

@@ -183,7 +183,7 @@ def test_without_exclude_extra_column_is_scored_as_plan():
 
 
 # ---------------------------------------------------------------------------
-# Chart and Dash app
+# Input checks and new options
 # ---------------------------------------------------------------------------
 
 def test_plot_seats_votes_draws_every_plan_by_default():
@@ -226,3 +226,60 @@ def test_seats_votes_app_callback_handles_no_plans_ticked():
     observed = [trace.name for trace in update([]).data]
     expected = ["proportional"]
     assert observed == expected
+
+
+def test_exclude_can_list_id_column():
+    observed = seats_votes_curve(make_votes(), exclude=["precinct_id"])["plan"].unique().tolist()
+    expected = ["plan_a", "plan_b"]
+    assert observed == expected
+
+
+def test_exclude_can_list_geometry_column():
+    votes = make_votes()
+    votes["geometry"] = None
+    observed = seats_votes_curve(votes, exclude=["geometry"])["plan"].unique().tolist()
+    expected = ["plan_a", "plan_b"]
+    assert observed == expected
+
+
+def test_other_vote_column_names_give_same_result():
+    votes = make_votes().rename(columns={"dem": "D_votes", "rep": "R_votes"})
+    observed = seats_votes_curve(votes, dem="D_votes", rep="R_votes")
+    expected = seats_votes_curve(make_votes())
+    assert observed.equals(expected)
+
+
+def test_missing_vote_column_raises():
+    votes = make_votes().rename(columns={"dem": "D_votes"})
+    with pytest.raises(ValueError, match="dem"):
+        seats_votes_curve(votes)
+
+
+def test_chosen_name_clashing_with_existing_column_raises():
+    votes = make_votes()
+    votes["D_votes"] = votes["dem"]
+    with pytest.raises(ValueError, match="already has"):
+        seats_votes_curve(votes, dem="D_votes")
+
+
+def test_blank_vote_cell_raises():
+    votes = make_votes().astype({"dem": float})
+    votes.loc[0, "dem"] = float("nan")
+    with pytest.raises(ValueError, match="blank dem"):
+        seats_votes_curve(votes)
+
+
+def test_plan_with_no_districts_raises():
+    votes = make_votes()
+    votes["plan_blank"] = float("nan")
+    with pytest.raises(ValueError, match="no district has any votes"), pytest.warns(UserWarning, match="no district"):
+        seats_votes_curve(votes)
+
+
+@pytest.mark.parametrize("low, high, step", [
+    (0.4, 0.6, 0.03),  # does not fit the range evenly
+    (0.4, 0.6, 0.5),   # bigger than the range
+])
+def test_step_that_does_not_fit_range_raises(low, high, step):
+    with pytest.raises(ValueError, match="evenly"):
+        seats_votes_curve(make_votes(), low=low, high=high, step=step)

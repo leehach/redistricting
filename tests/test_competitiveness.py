@@ -128,12 +128,15 @@ def test_join_plans_shape_and_missing_precinct():
     votes = pd.DataFrame({"precinct_id": ["01", "02", "03"],
                           "county": ["A", "A", "B"],
                           "dem": [10, 20, 30], "rep": [30, 20, 10]})
-    # plan_x does not list precinct 03
-    plans = {"plan_x": pd.DataFrame({"GEOID20": ["01", "02"], "District": ["1", "2"]})}
+    plans = {"plan_x": pd.DataFrame({"GEOID20": ["01", "02", "03"], "District": ["1", "2", "2"]})}
     df = join_plans(votes, plans)
     assert df.columns.tolist() == ["precinct_id", "dem", "rep", "plan_x"]
-    assert df["plan_x"].tolist()[:2] == ["1", "2"]
-    assert pd.isna(df["plan_x"].iloc[2])
+    assert df["plan_x"].tolist() == ["1", "2", "2"]
+
+    # a plan that leaves out precinct 03 now stops with an error
+    plans = {"plan_x": pd.DataFrame({"GEOID20": ["01", "02"], "District": ["1", "2"]})}
+    with pytest.raises(ValueError):
+        join_plans(votes, plans)
 
 
 def test_join_plans_duplicate_precinct_raises():
@@ -195,3 +198,101 @@ def test_without_exclude_extra_column_is_scored_as_plan():
     observed = competitive_districts(votes)["plan"].tolist()
     expected = ["plan_a", "plan_b", "area"]
     assert observed == expected
+
+
+# ---------------------------------------------------------------------------
+# Input checks and new options
+# ---------------------------------------------------------------------------
+
+def test_join_plans_other_vote_column_names():
+    votes = pd.DataFrame({"precinct_id": ["01"], "D": [10], "R": [30]})
+    plans = {"plan_x": pd.DataFrame({"GEOID20": ["01"], "District": ["1"]})}
+    observed = join_plans(votes, plans, dem="D", rep="R").columns.tolist()
+    expected = ["precinct_id", "dem", "rep", "plan_x"]
+    assert observed == expected
+
+
+def test_join_plans_precinct_missing_from_votes_raises():
+    # the plan lists 01, 02, 03 in district 1, but votes only cover 01 and 03
+    votes = pd.DataFrame({"precinct_id": ["01", "03"], "dem": [50, 50], "rep": [50, 50]})
+    plans = {"plan_x": pd.DataFrame({"GEOID20": ["01", "02", "03"], "District": ["1", "1", "1"]})}
+    with pytest.raises(ValueError, match="1 in the plan but not votes"):
+        join_plans(votes, plans)
+
+
+def test_join_plans_blank_id_read_as_float_raises(tmp_path):
+    # one blank id makes pandas read every id as a float
+    (tmp_path / "votes.csv").write_text("GEOID20,dem,rep\n42001000010,10,20\n,5,5\n")
+    votes = pd.read_csv(tmp_path / "votes.csv")
+    plans = {"plan_x": pd.DataFrame({"GEOID20": ["42001000010"], "District": ["1"]})}
+    with pytest.raises(ValueError, match="blank precinct id"):
+        join_plans(votes, plans)
+
+
+def test_join_plans_float_ids_raise_with_dtype_hint():
+    votes = pd.DataFrame({"GEOID20": [42001000010.0], "dem": [10], "rep": [20]})
+    plans = {"plan_x": pd.DataFrame({"GEOID20": ["42001000010"], "District": ["1"]})}
+    with pytest.raises(ValueError, match="dtype=str"):
+        join_plans(votes, plans)
+
+
+def test_join_plans_blank_district_raises():
+    votes = pd.DataFrame({"precinct_id": ["01"], "dem": [10], "rep": [20]})
+    plans = {"plan_x": pd.DataFrame({"GEOID20": ["01"], "District": [None]})}
+    with pytest.raises(ValueError, match="no district"):
+        join_plans(votes, plans)
+
+
+def test_join_plans_duplicate_vote_precinct_raises():
+    votes = pd.DataFrame({"precinct_id": ["01", "01"], "dem": [10, 20], "rep": [30, 20]})
+    plans = {"plan_x": pd.DataFrame({"GEOID20": ["01"], "District": ["1"]})}
+    with pytest.raises(ValueError, match="votes"):
+        join_plans(votes, plans)
+
+
+def test_exclude_can_list_id_column():
+    observed = competitive_districts(make_votes(), exclude=["precinct_id"])["plan"].unique().tolist()
+    expected = ["plan_a", "plan_b"]
+    assert observed == expected
+
+
+def test_exclude_can_list_geometry_column():
+    votes = make_votes()
+    votes["geometry"] = None
+    observed = competitive_districts(votes, exclude=["geometry"])["plan"].unique().tolist()
+    expected = ["plan_a", "plan_b"]
+    assert observed == expected
+
+
+def test_other_vote_column_names_give_same_result():
+    votes = make_votes().rename(columns={"dem": "D_votes", "rep": "R_votes"})
+    observed = competitive_districts(votes, dem="D_votes", rep="R_votes")
+    expected = competitive_districts(make_votes())
+    assert observed.equals(expected)
+
+
+def test_missing_vote_column_raises():
+    votes = make_votes().rename(columns={"dem": "D_votes"})
+    with pytest.raises(ValueError, match="dem"):
+        competitive_districts(votes)
+
+
+def test_chosen_name_clashing_with_existing_column_raises():
+    votes = make_votes()
+    votes["D_votes"] = votes["dem"]
+    with pytest.raises(ValueError, match="already has"):
+        competitive_districts(votes, dem="D_votes")
+
+
+def test_blank_vote_cell_raises():
+    votes = make_votes().astype({"dem": float})
+    votes.loc[0, "dem"] = float("nan")
+    with pytest.raises(ValueError, match="blank dem"):
+        competitive_districts(votes)
+
+
+def test_plan_with_no_districts_raises():
+    votes = make_votes()
+    votes["plan_blank"] = float("nan")
+    with pytest.raises(ValueError, match="no district has any votes"), pytest.warns(UserWarning, match="no district"):
+        competitive_districts(votes)
