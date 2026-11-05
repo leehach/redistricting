@@ -1,7 +1,7 @@
 """
 Interactive Pareto-frontier explorer for DEA results of redistricting plans.
 
-A Dash app that scores plans with redistricting.DEA.slacks_based_measure:
+A Dash app that scores plans with SBM through redistricting.DEA.dea:
 
   * a scatter plot of any two metrics, with every axis oriented so that
     up and right are better
@@ -28,7 +28,7 @@ Usage (see examples/frontier_app/app.py):
 Pass more than one Dataset to switch between them with the "Data" dropdown.
 
 `plans` has one row per plan. `direction` maps each metric column to
-"higher" or "lower", the same as score_plans.
+"higher" or "lower", the same as dea.score.
 """
 
 import hashlib
@@ -40,8 +40,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import Dash, Input, Output, ctx, dcc, html, no_update
 
-from redistricting.DEA import slacks_based_measure
-from redistricting.DEA.slacks_based_measure import score_plans
+from redistricting.DEA import dea, slacks_based_measure
 
 # GLPK returns 0.9999999... for some frontier plans.
 TOL = 1e-6
@@ -54,23 +53,23 @@ def add_dea_scores(df: pd.DataFrame, direction: dict[str, str],
                    cache_dir: str | Path | None = None) -> pd.DataFrame:
     """Return a copy of df with DEA_Score and On_Frontier columns.
 
-    DEA_Score comes from score_plans over the columns named in `direction`.
+    DEA_Score comes from dea.score over the columns named in `direction`.
     On_Frontier is True when the score is 1.
 
-    score_plans runs one solve per plan, which takes minutes for thousands
+    dea.score runs one solve per plan, which takes minutes for thousands
     of plans. With `cache_dir`, the scores are saved there and read back on
     the next call with the same metric values, directions, and DEA code.
     """
     metrics = df[list(direction)]
 
     if cache_dir is None:
-        scores = score_plans(metrics, direction).to_numpy()
+        scores = dea.score(metrics, direction, "sbm").to_numpy()
     else:
         path = Path(cache_dir) / f"dea_scores_{_cache_key(metrics, direction)}.csv"
         if path.exists():
             scores = pd.read_csv(path)["DEA_Score"].to_numpy()
         else:
-            scores = score_plans(metrics, direction).to_numpy()
+            scores = dea.score(metrics, direction, "sbm").to_numpy()
             path.parent.mkdir(parents=True, exist_ok=True)
             pd.DataFrame({"DEA_Score": scores}).to_csv(path, index=False)
 
@@ -87,10 +86,10 @@ def convex_hull_2d(results: pd.DataFrame, x: str, y: str,
     These are the corners of the convex hull of the Pareto frontier
     (Gopalan et al. 2026, Figure 2, solid line).
 
-    score_plans needs at least one "higher" metric, so this adds a
+    SBM needs at least one "higher" metric, so this adds a
     constant "higher" column of 1s. Its weight cancels the model's v >= 1
     floor (the paper's constraint 4), so the result is the plain convex
-    hull of Figure 2. It can include plans that score_plans scores below
+    hull of Figure 2. It can include plans that SBM scores below
     1 on the same two metrics, such as a plan that is best on only one.
 
     Only the Pareto plans are scored. Every weight in the model is above
@@ -101,8 +100,8 @@ def convex_hull_2d(results: pd.DataFrame, x: str, y: str,
     front = pareto_2d(results, x, y, direction)
     metrics = front[[x, y]].copy()
     metrics["_one"] = 1.0
-    scores = score_plans(metrics, {x: direction[x], y: direction[y],
-                                   "_one": "higher"})
+    hull_direction = {x: direction[x], y: direction[y], "_one": "higher"}
+    scores = dea.score(metrics, hull_direction, "sbm")
     return front[scores >= 1 - TOL].sort_values([x, y])
 
 
@@ -493,5 +492,6 @@ def _cache_key(metrics: pd.DataFrame, direction: dict[str, str]) -> str:
     digest = hashlib.sha256()
     digest.update(pd.util.hash_pandas_object(metrics, index=False).to_numpy().tobytes())
     digest.update(json.dumps([list(metrics.columns), direction]).encode())
-    digest.update(Path(slacks_based_measure.__file__).read_bytes())
+    for module in (dea, slacks_based_measure):
+        digest.update(Path(module.__file__).read_bytes())
     return digest.hexdigest()[:16]

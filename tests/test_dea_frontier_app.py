@@ -6,7 +6,7 @@ redistricting/ and tests/ folders):
 
     python -m pytest tests/test_dea_frontier_app.py -v
 
-Scoring uses the real score_plans, so Pyomo and GLPK must be installed
+Scoring uses the real dea.score, so Pyomo and GLPK must be installed
 (they are in environment.yml).
 
 Most tests use plans A, B, C from the SBM tests, whose scores were worked
@@ -81,7 +81,7 @@ def test_add_dea_scores_reads_cache(tmp_path, monkeypatch):
     first = add_dea_scores(plans, direction, tmp_path)
 
     # a second solve would fail, so this call must read the cache file
-    monkeypatch.setattr(dea_frontier_app, "score_plans", _fail_if_called)
+    monkeypatch.setattr(dea_frontier_app.dea, "score", _fail_if_called)
     second = add_dea_scores(plans, direction, tmp_path)
 
     assert list(second["DEA_Score"]) == list(first["DEA_Score"])
@@ -639,4 +639,4 @@ def test_update_panel():
 
 
 def _fail_if_called(*args):
-    raise AssertionError("score_plans ran instead of reading the cache")
+    raise AssertionError("dea.score ran instead of reading the cache")
