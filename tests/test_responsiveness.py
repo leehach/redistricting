@@ -16,7 +16,7 @@ Expected values are worked out by hand in each test.
 import pandas as pd
 import pytest
 
-from redistricting.responsiveness import responsiveness
+from redistricting.responsiveness import responsiveness, score_plan
 
 TOLERANCE = 1e-9
 
@@ -198,3 +198,13 @@ def test_plan_with_no_districts_raises():
     votes["plan_blank"] = float("nan")
     with pytest.raises(ValueError, match="no district has any votes"), pytest.warns(UserWarning, match="no district"):
         responsiveness(votes)
+
+
+def test_score_plan():
+    # dem shares 0.6, 0.4, 0.5375; statewide 0.5125
+    # at 47.5%: 0.5625 0.3625 0.5 -> tie goes R -> 1 of 3
+    # at 52.5%: 0.6125 0.4125 0.55 -> 2 of 3
+    # (2/3 - 1/3) / 0.05 = 6.667
+    observed = score_plan([240, 160, 215], [160, 240, 185], [1, 2, 3])
+    expected = {"responsiveness": 20 / 3}
+    assert observed == pytest.approx(expected, abs=TOLERANCE)

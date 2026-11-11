@@ -16,7 +16,7 @@ Expected values are worked out by hand in each test.
 import pandas as pd
 import pytest
 
-from redistricting.seats_votes import plot_seats_votes, seats_votes_app, seats_votes_curve
+from redistricting.seats_votes import plot_seats_votes, score_plan, seats_votes_app, seats_votes_curve
 
 TOLERANCE = 1e-9
 
@@ -283,3 +283,13 @@ def test_plan_with_no_districts_raises():
 def test_step_that_does_not_fit_range_raises(low, high, step):
     with pytest.raises(ValueError, match="evenly"):
         seats_votes_curve(make_votes(), low=low, high=high, step=step)
+
+
+def test_score_plan():
+    # dem shares 0.6, 0.4, 0.5375; statewide 0.5125
+    # at 45%: 0.5375 0.3375 0.475 -> 1 seat
+    # at 50%: 0.5875 0.3875 0.525 -> 2 seats
+    # at 55%: 0.6375 0.4375 0.575 -> 2 seats
+    observed = score_plan([240, 160, 215], [160, 240, 185], [1, 2, 3])
+    expected = {"dem_seats_at_45pct": 1, "dem_seats_at_50pct": 2, "dem_seats_at_55pct": 2}
+    assert observed == expected

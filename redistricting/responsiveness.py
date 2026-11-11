@@ -5,6 +5,7 @@ Responsiveness is how much a plan's seat share changes when the statewide
 vote shifts, measured near a 50-50 vote:
 
     responsiveness   change in Democratic seat share per change in vote share
+    score_plan       the same score for one plan, as the metrics GUI uses it
 
 A responsiveness of 2 means a 1-point swing in the statewide vote moves about
 2% of the seats. A plan of all safe districts scores 0.
@@ -253,6 +254,59 @@ def responsiveness(df, window=0.025, exclude=None, dem="dem", rep="rep"):
         results.append({"plan": plan,
                         "responsiveness": _responsiveness(district_totals, window)})
     return pd.DataFrame(results)
+
+
+def _one_plan_table(dem, rep, district):
+    """Build the input table for one plan from separate columns."""
+    dem = pd.Series(dem)
+    return pd.DataFrame({
+        "cell_id": dem.index.astype(str),
+        "dem": dem.values,
+        "rep": pd.Series(rep).values,
+        "plan": pd.Series(district).values,
+    })
+
+
+def score_plan(dem, rep, district, window=0.025):
+    """
+    Calculate responsiveness for one plan from separate columns.
+
+    Parameters
+    ----------
+    dem, rep, district : array-like
+        One value per precinct, in the same order: Democratic votes, Republican
+        votes, and the precinct's district in this plan.
+    window : float, optional
+        How far either side of a 50% statewide vote to measure, as a fraction
+        of the two-party vote. Defaults to 0.025 (47.5% to 52.5%).
+
+    Returns
+    -------
+    dict
+        ``{"responsiveness": score}`` for the plan.
+
+    Raises
+    ------
+    ValueError
+        If ``window`` is out of range, the inputs differ in length, a vote value
+        is blank, or the plan has no district with votes.
+
+    Notes
+    -----
+    This uses the same calculation as ``responsiveness``. A dict is the format
+    the metrics GUI uses for plan-wide numbers.
+
+    Examples
+    --------
+    In ``metrics_gui/metrics.py``:
+
+    >>> @metric("Responsiveness", "Responsiveness", needs=PARTISAN_NEEDS)
+    ... def responsive(ctx):
+    ...     return responsiveness.score_plan(ctx.column("dem_votes"), ctx.column("rep_votes"),
+    ...                                      ctx.district)
+    """
+    result = responsiveness(_one_plan_table(dem, rep, district), window)
+    return result.drop(columns="plan").to_dict("records")[0]
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ A district is competitive when its Democratic and Republican shares of the
 two-party vote are within 5 percentage points of each other:
 
     competitive_districts   number of competitive districts in a plan
+    score_plan              the same count for one plan, as the metrics GUI uses it
 
 Plans are precinct assignment files, one CSV per plan, as in the CCFD plan
 collection (for example, its ``pa-senate`` folder):
@@ -343,3 +344,56 @@ def competitive_districts(df, threshold=0.05, exclude=None, dem="dem", rep="rep"
         results.append({"plan": plan,
                         "competitive_districts": _competitive_districts(district_totals, threshold)})
     return pd.DataFrame(results)
+
+
+def _one_plan_table(dem, rep, district):
+    """Build the input table for one plan from separate columns."""
+    dem = pd.Series(dem)
+    return pd.DataFrame({
+        "cell_id": dem.index.astype(str),
+        "dem": dem.values,
+        "rep": pd.Series(rep).values,
+        "plan": pd.Series(district).values,
+    })
+
+
+def score_plan(dem, rep, district, threshold=0.05):
+    """
+    Calculate the number of competitive districts for one plan from separate columns.
+
+    Parameters
+    ----------
+    dem, rep, district : array-like
+        One value per precinct, in the same order: Democratic votes, Republican
+        votes, and the precinct's district in this plan.
+    threshold : float, optional
+        Largest gap between Democratic and Republican shares, as a fraction of
+        the two-party vote. Defaults to 0.05 (5 percentage points).
+
+    Returns
+    -------
+    dict
+        ``{"competitive_districts": count}`` for the plan.
+
+    Raises
+    ------
+    ValueError
+        If the inputs differ in length, a vote value is blank, or the plan has
+        no district with votes.
+
+    Notes
+    -----
+    This uses the same calculation as ``competitive_districts``. A dict is the
+    format the metrics GUI uses for plan-wide numbers.
+
+    Examples
+    --------
+    In ``metrics_gui/metrics.py``:
+
+    >>> @metric("Competitiveness", "Competitive districts", needs=PARTISAN_NEEDS)
+    ... def competitive(ctx):
+    ...     return competitiveness.score_plan(ctx.column("dem_votes"), ctx.column("rep_votes"),
+    ...                                       ctx.district)
+    """
+    result = competitive_districts(_one_plan_table(dem, rep, district), threshold)
+    return result.drop(columns="plan").to_dict("records")[0]
