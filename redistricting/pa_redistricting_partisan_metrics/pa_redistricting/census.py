@@ -14,40 +14,38 @@ import pandas as pd
 import requests
 
 from .config import CENSUS_API_URL, CENSUS_KEY_SIGNUP_URL, STATE_FIPS
+from .demographics import RACES, add_percentages
 
 log = logging.getLogger(__name__)
 
 PA_COUNTIES = [f"{i:03d}" for i in range(1, 134, 2)]  # 001, 003, ... 133
 
-# Census variable code -> friendly column name
-VARIABLES = {
-    # P1: race (total population)
-    "P1_001N": "pop_total",
-    "P1_003N": "pop_white",
-    "P1_004N": "pop_black",
-    "P1_005N": "pop_aian",
-    "P1_006N": "pop_asian",
-    "P1_007N": "pop_nhpi",
-    "P1_008N": "pop_other",
-    "P1_009N": "pop_two_plus",
-    # P2: Hispanic or Latino
-    "P2_002N": "pop_hispanic",
-    "P2_005N": "pop_nh_white",
-    "P2_006N": "pop_nh_black",
-    # P3 / P4: voting-age population (18+)
-    "P3_001N": "vap_total",
-    "P3_003N": "vap_white",
-    "P3_004N": "vap_black",
-    "P4_002N": "vap_hispanic",
-    "P4_005N": "vap_nh_white",
-    "P4_006N": "vap_nh_black",
-    # P5: group quarters
+# Counts VEST also has (demographics.COUNT_COLUMNS).
+# P2 / P4: Hispanic or Latino, and not Hispanic by race (total / 18+).
+# _001N total, _002N Hispanic, _005N.._011N not Hispanic: White .. two or more races
+SHARED_VARIABLES = {
+    "P2_001N": "pop_total", "P2_002N": "pop_hispanic",
+    **{f"P2_{i:03d}N": f"pop_nh_{r}" for i, r in zip(range(5, 12), RACES)},
+    "P4_001N": "vap_total", "P4_002N": "vap_hispanic",
+    **{f"P4_{i:03d}N": f"vap_nh_{r}" for i, r in zip(range(5, 12), RACES)},
+}
+
+# Only in the Census API
+EXTRA_VARIABLES = {
+    # P1 / P3: race alone, INCLUDING Hispanics (_003N White .. _009N two or more)
+    **{f"P1_{i:03d}N": f"pop_{r}_incl_hisp" for i, r in zip(range(3, 10), RACES)},
+    **{f"P3_{i:03d}N": f"vap_{r}_incl_hisp" for i, r in zip(range(3, 10), RACES)},
+    # P5: group quarters (correctional = adult correctional facilities)
     "P5_001N": "gq_total",
+    "P5_003N": "gq_correctional",
     # H1: housing occupancy
     "H1_001N": "housing_total",
     "H1_002N": "housing_occupied",
     "H1_003N": "housing_vacant",
 }
+
+VARIABLES = {**SHARED_VARIABLES, **EXTRA_VARIABLES}   # 37 codes; the API allows 50 per request
+EXTRA_COLUMNS = list(EXTRA_VARIABLES.values())
 
 KEY_HELP = f"""No Census API key found.
 
@@ -96,21 +94,6 @@ def fetch_vtd_data(api_key: str | None = None) -> pd.DataFrame:
     for col in VARIABLES.values():
         df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
     return df
-
-
-def add_percentages(df: pd.DataFrame) -> pd.DataFrame:
-    """Add a few percentage columns; blank where the denominator is zero."""
-    def pct(num: str, den: str) -> pd.Series:
-        d = df[den].astype("float").where(df[den] > 0)
-        return (100 * df[num].astype("float") / d).round(2)
-
-    return df.assign(
-        pct_hispanic=pct("pop_hispanic", "pop_total"),
-        pct_nh_white=pct("pop_nh_white", "pop_total"),
-        pct_nh_black=pct("pop_nh_black", "pop_total"),
-        pct_vap=pct("vap_total", "pop_total"),
-        pct_vacant=pct("housing_vacant", "housing_total"),
-    )
 
 
 def fetch_census(api_key: str | None = None) -> pd.DataFrame:

@@ -8,15 +8,12 @@
 
 import pandas as pd
 
+from .census import EXTRA_COLUMNS
 from .config import N_DISTRICTS
+from .demographics import COUNT_COLUMNS
 
-# Counts added up per Senate district
-SUM_FIELDS = [
-    "pop_total", "pop_white", "pop_black", "pop_aian", "pop_asian", "pop_nhpi",
-    "pop_other", "pop_two_plus", "pop_hispanic", "pop_nh_white", "pop_nh_black",
-    "vap_total", "vap_white", "vap_black", "vap_hispanic", "vap_nh_white", "vap_nh_black",
-    "gq_total", "housing_total", "housing_occupied", "housing_vacant",
-]
+# Counts added up per Senate district (whichever ones the plan's table has)
+SUM_FIELDS = [*COUNT_COLUMNS, *EXTRA_COLUMNS]
 
 
 def population_summary(df: pd.DataFrame,

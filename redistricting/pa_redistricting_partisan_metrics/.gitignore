@@ -1,1 +1,5 @@
+# Output folders (default --out of each command)
 results/
+summaries/
+maps/
+partisan/

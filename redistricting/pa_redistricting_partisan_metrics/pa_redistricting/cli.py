@@ -25,7 +25,7 @@ from .election_results import available_elections, fetch_elections
 from .voting_districts import load_vtds
 from .maps import plot_plan
 from .partisan_metrics import METRICS, favors, partisan_summary
-from .plans import Plans
+from .plans import DEMOGRAPHICS_SOURCES, Plans
 from .population import population_summary
 
 MAP_DPI = 200
@@ -192,26 +192,28 @@ def write_results(plans: Plans, chosen: list[str], out: Path, votes: pd.DataFram
 
 
 def run_everything(plans: str | list[str] = "all", out: str | Path = "results",
-                   data: Plans | None = None, votes: pd.DataFrame | None = None) -> Path:
+                   data: Plans | None = None, votes: pd.DataFrame | None = None,
+                   demographics: str = "vest") -> Path:
     """Everything the run command does, callable from a script, notebook or IDE.
 
     plans: "all", one word, or a list of words matched against plan names.
     out:   output folder (created if needed).
     data:  an already loaded Plans; downloaded with Plans.load() if left out.
-    votes: already loaded election results; downloaded with fetch_elections() if left out.
+    votes: the VEST file from fetch_elections(); downloaded if left out.
+    demographics: "vest", "census" or "vest+census" (used only when data is left out).
     Returns the path of overview.csv.
     """
     words = [plans] if isinstance(plans, str) else list(plans)
     if not words:
         raise ValueError('plans is empty; use "all" or a list of words from plan names')
 
+    if votes is None:
+        votes = fetch_elections()
     if data is None:
-        data = Plans.load()
+        data = Plans.load(demographics, vest=votes)
     chosen = data.names if words == ["all"] else data.match(words)
     if not chosen:
         raise ValueError(f"No plan names contain: {', '.join(words)}")
-    if votes is None:
-        votes = fetch_elections()
     return write_results(data, chosen, Path(out), votes)
 
 
@@ -219,10 +221,11 @@ def run_everything(plans: str | list[str] = "all", out: str | Path = "results",
 # Commands
 # ---------------------------------------------------------------------------
 def cmd_run(args) -> None:
-    plans = Plans.load()
+    votes = fetch_elections()
+    plans = Plans.load(args.demographics, vest=votes)
     chosen = choose_plans(plans.names, args.plans, args.all)
     if chosen:
-        write_results(plans, chosen, args.out, fetch_elections())
+        write_results(plans, chosen, args.out, votes)
 
 
 def cmd_list(args) -> None:
@@ -233,7 +236,7 @@ def cmd_list(args) -> None:
 
 
 def cmd_summary(args) -> None:
-    plans = Plans.load()
+    plans = Plans.load(args.demographics)
     for plan in choose_plans(plans.names, args.plans, args.all):
         path, table, stats = write_summary(plans, plan, args.out)
         print_population_report(plan, table, stats)
@@ -241,7 +244,7 @@ def cmd_summary(args) -> None:
 
 
 def cmd_maps(args) -> None:
-    plans = Plans.load()
+    plans = Plans.load(args.demographics)
     chosen = choose_plans(plans.names, args.plans, args.all)
     for i, plan in enumerate(chosen, 1):
         path = write_map(plans, plan, args.out)
@@ -290,6 +293,10 @@ def build_parser() -> argparse.ArgumentParser:
         cmd.add_argument("plans", nargs="*", help="words to match in plan names")
         cmd.add_argument("--all", action="store_true", help="every plan")
         cmd.add_argument("--out", type=Path, default=Path(default_out), help="output folder")
+        if name != "partisan":
+            cmd.add_argument("--demographics", choices=DEMOGRAPHICS_SOURCES, default="vest",
+                             help="vest (default, no API key), census, or vest+census "
+                                  "for group quarters and housing too")
         cmd.set_defaults(func=func)
     return parser
 
