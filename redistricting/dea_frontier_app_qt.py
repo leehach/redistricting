@@ -58,11 +58,15 @@ from scipy.optimize import linprog
 # PyQt5 must be imported before pyqtgraph, so pyqtgraph uses it rather than
 # another Qt binding (PyQt6, PySide6) that may also be installed.
 from PyQt5 import uic
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (QApplication, QFrame, QGridLayout, QHBoxLayout,
-                             QLabel, QMainWindow, QProgressBar, QPushButton,
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtWidgets import (QApplication, QFileDialog, QFrame, QGridLayout,
+                             QHBoxLayout, QLabel, QMainWindow, QMessageBox,
+                             QProgressBar, QProgressDialog, QPushButton,
                              QVBoxLayout, QWidget)
 import pyqtgraph as pg
+
+from redistricting import plan_metrics
+from redistricting.DEA import dea
 
 # Window layout, made in Qt Designer.
 UI_FILE = Path(__file__).with_suffix(".ui")
@@ -84,6 +88,14 @@ DISPLAY_NAMES: dict[str, str] = {
 }
 
 TOL = 1e-6
+
+# Display names for the metrics in plan_metrics.DIRECTION.
+PLAN_METRIC_NAMES: dict[str, str] = {
+    "polsby_popper": "Polsby-Popper (mean)",
+    "max_pop_deviation": "Max Pop. Deviation (%)",
+    "split_counties": "Split Counties",
+    "efficiency_gap": "Efficiency Gap (abs)",
+}
 
 
 # --------------------------------------------------------------------------
@@ -304,6 +316,57 @@ pg.setConfigOptions(antialias=True, background="w", foreground=INK)
 
 
 # --------------------------------------------------------------------------
+# Real plans
+# --------------------------------------------------------------------------
+def score_sbm(metrics: pd.DataFrame, direction: dict[str, str],
+              id_col: str = "Plan_ID") -> pd.DataFrame:
+    """Score plans with SBM DEA, in the columns FrontierWindow reads.
+
+    ``metrics`` has one row per plan, indexed by plan name. A plan is on
+    the frontier when its SBM score is 1. SBM gives no peers or slacks, so
+    the side panel leaves those out.
+    """
+    scores = dea.score(metrics, direction, "sbm")
+    efficient = (scores >= 1 - TOL).astype(int)
+
+    results = metrics.rename_axis(id_col).reset_index()
+    results["DEA_Score"] = scores.to_numpy()
+    results["DEA_Efficient"] = efficient.to_numpy()
+    results["DEA_Status"] = np.where(efficient, "efficient", "inefficient")
+    return results
+
+
+def read_plan_files(paths: list[str]) -> dict[str, pd.DataFrame]:
+    """Read plan CSVs, each named by its file name without ".csv"."""
+    # Geoids are text: a number type would drop leading zeros.
+    return {Path(p).stem: pd.read_csv(p, dtype=str) for p in sorted(paths)}
+
+
+class PlanLoader(QThread):
+    """Reads plan files, measures them and scores them, off the UI thread."""
+
+    done = pyqtSignal(object)    # the score_sbm results
+    failed = pyqtSignal(str)     # an error message for the user
+
+    # The geounits download once per app run, then stay in memory.
+    _geounits = None
+
+    def __init__(self, paths: list[str]):
+        super().__init__()
+        self.paths = paths
+
+    def run(self):
+        try:
+            if PlanLoader._geounits is None:
+                PlanLoader._geounits = plan_metrics.load_pa_geounits()
+            plans = plan_metrics.combine_plans(read_plan_files(self.paths))
+            metrics = plan_metrics.measure(plans, PlanLoader._geounits)
+            self.done.emit(score_sbm(metrics, plan_metrics.DIRECTION))
+        except Exception as error:  # show any failure to the user
+            self.failed.emit(str(error))
+
+
+# --------------------------------------------------------------------------
 # Data helpers
 # --------------------------------------------------------------------------
 def near_frontier(results: pd.DataFrame, n: int) -> pd.DataFrame:
@@ -442,8 +505,53 @@ class FrontierWindow(QMainWindow):
         self.showOthers.toggled.connect(self.redraw)
         self.showLine.toggled.connect(self.redraw)
 
+        toolbar = self.addToolBar("Plans")
+        toolbar.addAction("Load plan files…", self.load_files)
+        toolbar.addAction("Load plan folder…", self.load_folder)
+        self._loader: PlanLoader | None = None
+
         self.redraw()
         self.update_panel()
+
+    # ---- loading real plans --------------------------------------------
+    def load_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Load plan files", "", "CSV files (*.csv)")
+        if paths:
+            self._start_loading(paths)
+
+    def load_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Load plan folder")
+        paths = [str(p) for p in Path(folder).glob("*.csv")] if folder else []
+        if paths:
+            self._start_loading(paths)
+        elif folder:
+            QMessageBox.warning(self, "No plans", f"No CSV files in {folder}")
+
+    def _start_loading(self, paths: list[str]):
+        self._progress = QProgressDialog(
+            f"Measuring and scoring {len(paths)} plan file(s)…", None, 0, 0, self)
+        self._progress.setWindowModality(Qt.WindowModal)
+        self._progress.show()
+
+        self._loader = PlanLoader(paths)
+        self._loader.done.connect(self._loaded)
+        self._loader.failed.connect(self._load_failed)
+        self._loader.start()
+
+    def _loaded(self, results: pd.DataFrame):
+        self._progress.close()
+        window = FrontierWindow(
+            results, metrics={m: d == "higher" for m, d in plan_metrics.DIRECTION.items()},
+            display_names=PLAN_METRIC_NAMES)
+        # Keep a reference, or Python deletes the new window.
+        QApplication.instance().frontier_window = window
+        window.show()
+        self.close()
+
+    def _load_failed(self, message: str):
+        self._progress.close()
+        QMessageBox.warning(self, "Could not load plans", message)
 
     # ---- selection ------------------------------------------------------
     def select(self, plan_id: str | None):
@@ -572,6 +680,8 @@ class FrontierWindow(QMainWindow):
         status = row["DEA_Status"]
         color = STATUS_COLORS.get(status, MUTED)
         efficient = row["DEA_Efficient"] == 1
+        # SBM results (score_sbm) have no peers or slacks to show.
+        has_peers = "DEA_Peers" in r.columns
         targets = frontier_targets(row, self.metrics, self.orientation)
 
         # Header: plan id, status badge, score
@@ -591,7 +701,8 @@ class FrontierWindow(QMainWindow):
             allv = r[col].astype(float)
             pct = float((allv <= v).mean() if higher_better else (allv >= v).mean())
             t = targets[col]
-            show_target = not efficient and abs(t - v) > 1e-6 * max(1.0, abs(v))
+            show_target = (has_peers and not efficient
+                           and abs(t - v) > 1e-6 * max(1.0, abs(v)))
 
             top = QHBoxLayout()
             top.addWidget(_label(f"{self.names.get(col, col)} {'↑' if higher_better else '↓'}",
@@ -630,6 +741,8 @@ class FrontierWindow(QMainWindow):
             layout.addWidget(_label(
                 "This plan is on the DEA frontier: no blend of other plans "
                 "beats it on every metric.", f"color: {MUTED};", wrap=True))
+            return
+        if not has_peers:
             return
 
         layout.addWidget(_label("Frontier peers", "font-weight: 600;"))
