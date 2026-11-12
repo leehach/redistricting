@@ -244,6 +244,16 @@ def test_plot_seats_votes_steps_match_curve():
     assert abs(line.xData[-1] - 0.65) < TOLERANCE
 
 
+def test_plot_seats_votes_x_ticks_cover_both_ends():
+    # default range 35% to 65%, a tick every 5 points; 0.35 / 0.05 is not exactly 7
+    needs_qt()
+    widget = plot_seats_votes(seats_votes_curve(make_votes()))
+    ticks = widget.getPlotItem().getAxis("bottom")._tickLevels[0]
+    observed = [label for _, label in ticks]
+    expected = ["35%", "40%", "45%", "50%", "55%", "60%", "65%"]
+    assert observed == expected
+
+
 def test_plot_seats_votes_redraw_clears_old_lines():
     needs_qt()
     curve = seats_votes_curve(make_votes())

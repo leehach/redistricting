@@ -385,6 +385,18 @@ def _step_edges(x):
     return np.r_[x[0], middles, x[-1]]
 
 
+def _percent_ticks(low, high, every):
+    """
+    Tick positions from ``low`` to ``high``, at each multiple of ``every``.
+
+    Rounds before ``ceil`` and ``floor``, since 0.35 / 0.05 is
+    7.000000000000001 in floating point and would otherwise skip the 35% tick.
+    """
+    first = np.ceil(round(low / every, 6))
+    last = np.floor(round(high / every, 6))
+    return np.round(np.arange(first, last + 1) * every, 6)
+
+
 def plot_seats_votes(curve, plans=None, widget=None):
     """
     Draw the seats-votes curve as a pyqtgraph chart.
@@ -462,10 +474,10 @@ def plot_seats_votes(curve, plans=None, widget=None):
 
     # percent tick labels, every 5 points on x and 10 points on y
     low, high = curve["dem_vote_share"].min(), curve["dem_vote_share"].max()
-    x_ticks = np.round(np.arange(np.ceil(low * 20) / 20, high + 1e-9, 0.05), 6)
-    y_ticks = np.round(np.arange(0, 1.01, 0.1), 6)
-    plot.getAxis("bottom").setTicks([[(v, f"{v:.0%}") for v in x_ticks]])
-    plot.getAxis("left").setTicks([[(v, f"{v:.0%}") for v in y_ticks]])
+    plot.getAxis("bottom").setTicks([[(v, f"{v:.0%}") for v in _percent_ticks(low, high, 0.05)]])
+    plot.getAxis("left").setTicks([[(v, f"{v:.0%}") for v in _percent_ticks(0, 1, 0.1)]])
+    # keep the first and last labels, which hang past the ends of the axis
+    plot.getAxis("bottom").setStyle(hideOverlappingLabels=False)
     plot.setRange(xRange=(low, high), yRange=(0, 1), padding=0.02)
     return widget
 
