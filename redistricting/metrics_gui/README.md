@@ -27,6 +27,32 @@ python main.py
 
 run `main.py`
 
+## Main window
+
+`python app.py` opens the main window instead. plans you import live in memory (`window.plans`,
+a `SessionPlans`) until you close it, and the list in the middle shows what's in there
+
+- from disk - type/paste or browse to a district assignments file, plus voting and demographic
+  files if you have them (they can all be different files/formats). `Add plan` joins them on the
+  precinct id (GEOID20, GEOID, precinct_id etc, doesn't have to be named the same in each file)
+- from the repo - `Import from repo...` lists the PA Senate citizen plans, pick some and it
+  downloads them with shapes + election results (+ Census if `CENSUS_API_KEY` is set)
+- click a plan to see how the join went (ex. "voting data: 8,921 of 9,178 precincts matched"),
+  then `Metrics...` opens the dialog below with that plan already loaded
+
+every precinct in the assignments file is kept, anything that didn't match is just blank.
+the join is in `reconcile.py`, the plans object is `session.py`, neither needs the window:
+
+```python
+from reconcile import read_table, reconcile
+plan = reconcile(read_table("plan.csv"), voting=read_table("votes.csv"))
+plan.data, plan.notes
+```
+
+to add an analysis: put a button next to `Metrics...` in `main_window.ui`, run
+`pyuic5 main_window.ui -o main_window_ui.py`, and connect it in `app.py` like `open_metrics`
+(`self.selected()` gives you the plan, `.data` is the table)
+
 ## How to use
 
 1. Input file - click `...` and pick a csv, shapefile, geopackage or geojson. one row per
@@ -49,6 +75,10 @@ every row. positive = favors R, negative = favors D. compactness 1 = most compac
 
 ## Files
 
+- `app.py` - the main window (imports, the plan list, buttons that open analyses)
+- `main_window.ui` / `main_window_ui.py` - its layout, same deal as the dialog's
+- `reconcile.py` - joins assignments + voting + demographics on the precinct id
+- `session.py` - the in-memory plans object
 - `metrics_dialog.ui` - the layout, edit in Qt Designer
 - `metrics_dialog_ui.py` - generated from the .ui, don't edit by hand
 - `main.py` - the window code (buttons, checkboxes, field dropdowns)

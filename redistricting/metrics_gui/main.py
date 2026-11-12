@@ -63,6 +63,7 @@ class MetricsDialog(QtWidgets.QDialog, Ui_MetricsDialog):
 
         if data is not None:
             self.set_data(data, name)
+            self.inputLineEdit.setText(f"from session: {name}")  # opened from the main window
         self.refresh_fields()
 
     # --- metric checkboxes ---
