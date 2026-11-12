@@ -16,6 +16,9 @@ from .maps import plot_plan
 from .partisan_metrics import partisan_summary
 from .plans import Plans
 from .population import population_summary
+from .state_data import load_state, pick_state
+from .state_metrics import read_plan, score_plan
 
 __all__ = ["MissingAPIKeyError", "Plans", "fetch_elections", "partisan_summary", "plot_plan",
-           "population_summary"]
+           "population_summary", "load_state", "pick_state",
+           "read_plan", "score_plan"]

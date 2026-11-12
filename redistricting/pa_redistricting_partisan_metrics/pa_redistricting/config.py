@@ -22,3 +22,12 @@ CENSUS_KEY_SIGNUP_URL = "https://api.census.gov/data/key_signup.html"
 # Votes per 2020 voting district (ALARM Project)
 ELECTIONS_URL = ("https://raw.githubusercontent.com/alarm-redist/census-2020/"
                  "main/census-vest-2020/pa_2020_vtd.csv")
+
+# --- Any state (state_data.py) ----------------------------------------------
+# Census TIGER/Line 2020 shapes: <root><fips>_<STATE_NAME>/<fips>/tl_2020_<fips>_<layer>.zip
+# layer is vtd20 (voting districts) or tabblock20 (Census blocks)
+TIGER_STATE_ROOT = "https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/"
+
+# ALARM Project census + VEST election data: <abbr>_2020_<level>.csv, level vtd or block
+ALARM_STATE_URL = ("https://raw.githubusercontent.com/alarm-redist/census-2020/"
+                   "main/census-vest-2020/{abbr}_2020_{level}.csv")
