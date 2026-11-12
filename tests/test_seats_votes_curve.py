@@ -11,12 +11,22 @@ Toy state: 8 precincts of 50 votes each, statewide 200 dem of 400 = 50%.
     plan_b district dem shares: 0.30, 0.35, 0.65, 0.70  (all safe districts)
 
 Expected values are worked out by hand in each test.
+
+The chart tests need PyQt5 and pyqtgraph and skip without them. They run
+without showing a window (Qt's "offscreen" platform), as in the Qt DEA
+explorer tests.
 """
+
+import os
+
+# must be set before Qt starts: draw into memory instead of on screen
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pandas as pd
 import pytest
 
-from redistricting.seats_votes import plot_seats_votes, score_plan, seats_votes_app, seats_votes_curve
+from redistricting.seats_votes import (plot_seats_votes, score_plan, seats_votes_curve,
+                                       seats_votes_window)
 
 TOLERANCE = 1e-9
 
@@ -186,44 +196,87 @@ def test_without_exclude_extra_column_is_scored_as_plan():
 # Input checks and new options
 # ---------------------------------------------------------------------------
 
+def needs_qt():
+    """Skip the test if PyQt5 or pyqtgraph is not installed."""
+    pytest.importorskip("PyQt5")
+    pytest.importorskip("pyqtgraph")
+
+
+def line_names(widget):
+    """Names of the named lines on a chart, bottom to top (the legend entries)."""
+    return [item.name() for item in widget.getPlotItem().listDataItems() if item.name()]
+
+
+def line_color(widget, name):
+    """Color of the named line on a chart, as a hex string."""
+    for item in widget.getPlotItem().listDataItems():
+        if item.name() == name:
+            return item.opts["pen"].color().name()
+    raise KeyError(name)
+
+
 def test_plot_seats_votes_draws_every_plan_by_default():
-    pytest.importorskip("plotly")
-    fig = plot_seats_votes(seats_votes_curve(make_votes()))
-    observed = [trace.name for trace in fig.data]
+    needs_qt()
+    widget = plot_seats_votes(seats_votes_curve(make_votes()))
+    observed = line_names(widget)
     expected = ["proportional", "plan_a", "plan_b"]
     assert observed == expected
 
 
 def test_plot_seats_votes_keeps_plan_color_when_others_are_hidden():
-    pytest.importorskip("plotly")
+    needs_qt()
     curve = seats_votes_curve(make_votes())
-    observed = plot_seats_votes(curve, ["plan_b"]).data[1].line.color
-    expected = plot_seats_votes(curve).data[2].line.color
+    observed = line_color(plot_seats_votes(curve, ["plan_b"]), "plan_b")
+    expected = line_color(plot_seats_votes(curve), "plan_b")
     assert observed == expected
 
 
-def test_seats_votes_app_checklist_lists_every_plan():
-    pytest.importorskip("dash")
-    app = seats_votes_app(seats_votes_curve(make_votes()))
-    observed = [app.layout["plans"].options, app.layout["plans"].value]
-    expected = [["plan_a", "plan_b"], ["plan_a", "plan_b"]]
-    assert observed == expected
+def test_plot_seats_votes_steps_match_curve():
+    # one step per vote share, so the line has one more edge than seat values
+    needs_qt()
+    curve = seats_votes_curve(make_votes())
+    widget = plot_seats_votes(curve, ["plan_a"])
+    line = [item for item in widget.getPlotItem().listDataItems() if item.name() == "plan_a"][0]
+    rows = curve[curve["plan"] == "plan_a"]
+    assert len(line.xData) == len(rows) + 1
+    assert line.yData.tolist() == rows["dem_seat_share"].tolist()
+    assert abs(line.xData[0] - 0.35) < TOLERANCE
+    assert abs(line.xData[-1] - 0.65) < TOLERANCE
 
 
-def test_seats_votes_app_callback_draws_ticked_plans():
-    pytest.importorskip("dash")
-    app = seats_votes_app(seats_votes_curve(make_votes()))
-    update = app.callback_map["curve.figure"]["callback"].__wrapped__
-    observed = [trace.name for trace in update(["plan_a"]).data]
+def test_plot_seats_votes_redraw_clears_old_lines():
+    needs_qt()
+    curve = seats_votes_curve(make_votes())
+    widget = plot_seats_votes(curve)
+    plot_seats_votes(curve, ["plan_a"], widget=widget)
+    observed = line_names(widget)
     expected = ["proportional", "plan_a"]
     assert observed == expected
 
 
-def test_seats_votes_app_callback_handles_no_plans_ticked():
-    pytest.importorskip("dash")
-    app = seats_votes_app(seats_votes_curve(make_votes()))
-    update = app.callback_map["curve.figure"]["callback"].__wrapped__
-    observed = [trace.name for trace in update([]).data]
+def test_seats_votes_window_checkboxes_list_every_plan():
+    needs_qt()
+    window = seats_votes_window(seats_votes_curve(make_votes()))
+    observed = [list(window.checkboxes), [box.isChecked() for box in window.checkboxes.values()]]
+    expected = [["plan_a", "plan_b"], [True, True]]
+    assert observed == expected
+
+
+def test_seats_votes_window_draws_ticked_plans():
+    needs_qt()
+    window = seats_votes_window(seats_votes_curve(make_votes()))
+    window.checkboxes["plan_b"].setChecked(False)
+    observed = line_names(window.chart)
+    expected = ["proportional", "plan_a"]
+    assert observed == expected
+
+
+def test_seats_votes_window_handles_no_plans_ticked():
+    needs_qt()
+    window = seats_votes_window(seats_votes_curve(make_votes()))
+    for box in window.checkboxes.values():
+        box.setChecked(False)
+    observed = line_names(window.chart)
     expected = ["proportional"]
     assert observed == expected
 

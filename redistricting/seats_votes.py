@@ -8,7 +8,8 @@ are counted at each step:
 
     seats_votes_curve   seat share at each statewide vote share, per plan
     plot_seats_votes    chart of the curve, one line per plan
-    seats_votes_app     Dash web app for choosing which plans to compare
+    seats_votes_window  desktop window for choosing which plans to compare
+    show_seats_votes    opens that window from a script and waits until it is closed
     score_plan          seats at chosen vote shares for one plan, as the metrics GUI uses it
 
 Input is one table with one row per precinct, the same shape the
@@ -23,8 +24,9 @@ counts for the two leading candidates; use the ``dem`` and ``rep`` arguments if
 your columns have other names. Every other column is a plan, with district assignments as values. A GeoDataFrame also works; its
 geometry column is ignored.
 
-The chart functions need ``plotly`` and ``dash``. They are imported inside those
-functions, so ``seats_votes_curve`` itself only needs pandas and numpy.
+The chart functions need ``PyQt5`` and ``pyqtgraph``, the same libraries as the
+metrics GUI and the Qt DEA frontier explorer. They are imported inside those
+functions, so ``seats_votes_curve`` and ``score_plan`` only need pandas and numpy.
 
 References
 ----------
@@ -38,9 +40,10 @@ Systems and Redistricting Plans. American Journal of Political Science, 38(2),
 PySAL redistricting notebook, The Historical Seats-Votes Curve:
 https://github.com/pysal/redistricting/blob/master/notebooks/00%20-%20The%20Historical%20Seats-Votes%20Curve.ipynb
 
-Plotly Technologies Inc. Dash Python documentation. https://dash.plotly.com/
+pyqtgraph documentation. https://pyqtgraph.readthedocs.io/
 """
 
+import sys
 import warnings
 
 import numpy as np
@@ -48,6 +51,13 @@ import pandas as pd
 
 # columns that are not plans
 INFO_COLUMNS = ["cell_id", "dem", "rep", "total", "geometry"]
+
+# one color per plan, in the order plans appear (the palette the Dash chart used)
+PLAN_COLORS = ["#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
+               "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"]
+REFERENCE_GRAY = "#9ca3af"   # proportional line
+GUIDE_GRAY = "#d1d5db"       # 50% vote and seat lines
+INK = "#1f2933"              # text and axes, as in the Qt DEA explorer
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +331,7 @@ def score_plan(dem, rep, district, vote_shares=(0.45, 0.5, 0.55)):
     -----
     This summarizes the curve in plan-wide numbers, the format the metrics GUI
     saves. Seats come from the same uniform swing as ``seats_votes_curve``; use
-    that function and ``seats_votes_app`` to see the whole curve.
+    that function and ``seats_votes_window`` to see the whole curve.
 
     Examples
     --------
@@ -339,9 +349,45 @@ def score_plan(dem, rep, district, vote_shares=(0.45, 0.5, 0.55)):
     return {f"dem_seats_at_{share * 100:g}pct": count for share, count in zip(vote_shares, seats)}
 
 
-def plot_seats_votes(curve, plans=None):
+_QT_APP = []   # holds the QApplication this module starts, so it is not garbage collected
+
+
+def _qt_app():
     """
-    Draw the seats-votes curve as a Plotly figure.
+    Return the running QApplication, starting one if there is none.
+
+    Qt widgets can only be made once a QApplication exists. Inside the metrics
+    GUI one is already running, so that one is reused. One started here is
+    kept in ``_QT_APP``; if Python deleted it, the next widget would crash Qt.
+    """
+    # PyQt5 before pyqtgraph, so pyqtgraph uses PyQt5 and not another Qt binding
+    from PyQt5.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+        _QT_APP.append(app)
+    return app
+
+
+def _step_edges(x):
+    """
+    Edges for a stepped line with one step centered on each vote share.
+
+    Each seat count holds from halfway before its vote share to halfway after,
+    and the first and last steps stop at the ends of the range. This draws the
+    same steps as the Dash chart's ``hvh`` line shape.
+    """
+    x = np.asarray(x, dtype=float)
+    if len(x) < 2:
+        return np.r_[x, x]
+    middles = (x[:-1] + x[1:]) / 2
+    return np.r_[x[0], middles, x[-1]]
+
+
+def plot_seats_votes(curve, plans=None, widget=None):
+    """
+    Draw the seats-votes curve as a pyqtgraph chart.
 
     Parameters
     ----------
@@ -349,59 +395,84 @@ def plot_seats_votes(curve, plans=None):
         Output of ``seats_votes_curve``.
     plans : list of str, optional
         Plans to draw. Defaults to every plan in ``curve``.
+    widget : pyqtgraph.PlotWidget, optional
+        Chart to draw on. Anything already on it is cleared first. Defaults to
+        a new chart.
 
     Returns
     -------
-    plotly.graph_objects.Figure
-        The chart. ``seats_votes_app`` displays it in Dash, and
-        ``fig.write_html("curve.html")`` saves a copy.
+    pyqtgraph.PlotWidget
+        The chart. ``seats_votes_window`` puts it in a window with a checkbox
+        per plan; ``widget.show()`` opens the chart on its own.
 
     Notes
     -----
     One stepped line per plan. The dashed diagonal is proportional
     representation (x% of votes wins x% of seats). Where a plan's line
     crosses the 50% vote line shows its partisan bias; how steep it is there
-    shows its responsiveness. Hovering over a line shows its vote and seat
-    shares. A plan keeps its color when other plans are hidden.
+    shows its responsiveness. Hovering over a point on a line shows its vote
+    and seat shares. A plan keeps its color when other plans are hidden.
+    Scroll to zoom, drag to pan, and click the small "A" in the corner to
+    reset the view.
     """
-    # imported here so seats_votes_curve works without plotly installed
-    import plotly.graph_objects as go
-    from plotly.colors import qualitative
+    # imported here so seats_votes_curve works without Qt installed
+    _qt_app()
+    import pyqtgraph as pg
+    from PyQt5.QtCore import Qt
 
     all_plans = curve["plan"].unique().tolist()
     if plans is None:
         plans = all_plans
 
-    fig = go.Figure()
-    # reference lines go below so the plan lines draw on top
-    fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", name="proportional",
-                             line={"dash": "dash", "color": "gray", "width": 1},
-                             hoverinfo="skip"))
-    fig.add_hline(y=0.5, line={"color": "lightgray", "width": 1}, layer="below")
-    fig.add_vline(x=0.5, line={"color": "lightgray", "width": 1}, layer="below")
+    if widget is None:
+        widget = pg.PlotWidget(background="w")
+        widget.resize(650, 600)
+    plot = widget.getPlotItem()
+    plot.clear()   # also empties the legend
+    if plot.legend is None:
+        plot.addLegend(offset=(10, -10), labelTextColor=INK,
+                       brush=pg.mkBrush(255, 255, 255, 230))
 
-    colors = qualitative.Plotly
+    # reference lines go first so the plan lines draw on top
+    for angle in (0, 90):
+        plot.addItem(pg.InfiniteLine(pos=0.5, angle=angle, pen=pg.mkPen(GUIDE_GRAY, width=1)))
+    plot.addItem(pg.PlotDataItem([0, 1], [0, 1], name="proportional",
+                                 pen=pg.mkPen(REFERENCE_GRAY, width=1, style=Qt.DashLine)))
+
     for plan in plans:
         rows = curve[curve["plan"] == plan]
-        fig.add_trace(go.Scatter(
-            x=rows["dem_vote_share"], y=rows["dem_seat_share"], mode="lines",
-            line_shape="hvh", name=str(plan),
-            line={"color": colors[all_plans.index(plan) % len(colors)]},
-            hovertemplate="%{x:.1%} of votes: %{y:.0%} of seats"))
+        x = rows["dem_vote_share"].to_numpy(float)
+        y = rows["dem_seat_share"].to_numpy(float)
+        color = PLAN_COLORS[all_plans.index(plan) % len(PLAN_COLORS)]
+        plot.addItem(pg.PlotDataItem(_step_edges(x), y, stepMode="center", name=str(plan),
+                                     pen=pg.mkPen(color, width=2)))
+        # hidden points carry the hover text and appear under the mouse;
+        # no name, so the legend has one entry per plan
+        plot.addItem(pg.ScatterPlotItem(
+            x=x, y=y, size=8, brush=pg.mkBrush(0, 0, 0, 0), pen=None,
+            hoverable=True, hoverBrush=pg.mkBrush(color), hoverPen=pg.mkPen("w", width=1),
+            tip=lambda x, y, data, plan=plan: f"{plan}\n{x:.1%} of votes: {y:.0%} of seats"))
 
-    fig.update_layout(title="Seats-votes curve", template="simple_white",
-                      width=650, height=600,
-                      xaxis_title="Statewide Democratic vote share",
-                      yaxis_title="Democratic seat share")
-    fig.update_xaxes(range=[curve["dem_vote_share"].min(), curve["dem_vote_share"].max()],
-                     tickformat=".0%")
-    fig.update_yaxes(range=[0, 1], tickformat=".0%")
-    return fig
+    plot.setTitle("Seats-votes curve", color=INK)
+    plot.setLabel("bottom", "Statewide Democratic vote share")
+    plot.setLabel("left", "Democratic seat share")
+    # the tick labels are already percents; stop pyqtgraph adding "(x0.001)"
+    for side in ("bottom", "left"):
+        plot.getAxis(side).enableAutoSIPrefix(False)
+
+    # percent tick labels, every 5 points on x and 10 points on y
+    low, high = curve["dem_vote_share"].min(), curve["dem_vote_share"].max()
+    x_ticks = np.round(np.arange(np.ceil(low * 20) / 20, high + 1e-9, 0.05), 6)
+    y_ticks = np.round(np.arange(0, 1.01, 0.1), 6)
+    plot.getAxis("bottom").setTicks([[(v, f"{v:.0%}") for v in x_ticks]])
+    plot.getAxis("left").setTicks([[(v, f"{v:.0%}") for v in y_ticks]])
+    plot.setRange(xRange=(low, high), yRange=(0, 1), padding=0.02)
+    return widget
 
 
-def seats_votes_app(curve):
+def seats_votes_window(curve):
     """
-    Build a Dash app that compares seats-votes curves.
+    Build a desktop window that compares seats-votes curves.
 
     Parameters
     ----------
@@ -410,32 +481,81 @@ def seats_votes_app(curve):
 
     Returns
     -------
-    dash.Dash
-        The app. ``seats_votes_app(curve).run()`` serves it on this computer
-        at http://127.0.0.1:8050 until stopped with Ctrl+C.
+    PyQt5.QtWidgets.QWidget
+        The window, not yet shown. ``window.checkboxes`` maps each plan to its
+        checkbox and ``window.chart`` is the pyqtgraph chart.
 
     Notes
     -----
-    A checklist above the chart shows or hides each plan. The chart itself
-    comes from ``plot_seats_votes``. See that function for how to read it.
-    Built with Dash (Plotly Technologies Inc.); see https://dash.plotly.com/.
+    A row of checkboxes above the chart shows or hides each plan. The chart
+    itself comes from ``plot_seats_votes``. See that function for how to read it.
+
+    The window has no parent, so it opens on its own beside the metrics GUI
+    instead of inside it. From code that is already running Qt, such as the
+    metrics GUI, keep a reference so Python does not close the window::
+
+        self.seats_votes = seats_votes_window(curve)
+        self.seats_votes.show()
+
+    From a script, use ``show_seats_votes`` instead.
     """
-    # imported here so seats_votes_curve works without dash installed
-    from dash import Dash, Input, Output, dcc, html
+    _qt_app()
+    from PyQt5.QtWidgets import QCheckBox, QHBoxLayout, QVBoxLayout, QWidget
 
     plans = curve["plan"].unique().tolist()
-    app = Dash(__name__, title="Seats-votes curve")
-    app.layout = html.Div([
-        dcc.Checklist(id="plans", options=plans, value=plans, inline=True),
-        dcc.Graph(id="curve", figure=plot_seats_votes(curve)),
-    ])
+    window = QWidget()
+    window.setWindowTitle("Seats-votes curve")
+    window.resize(700, 680)
+    layout = QVBoxLayout(window)
 
-    @app.callback(Output("curve", "figure"), Input("plans", "value"))
-    def _update_curve(selected):
-        """Redraw the chart with the plans ticked in the checklist."""
-        return plot_seats_votes(curve, selected)
+    boxes = QHBoxLayout()
+    window.checkboxes = {}
+    for plan in plans:
+        box = QCheckBox(str(plan))
+        box.setChecked(True)
+        boxes.addWidget(box)
+        window.checkboxes[plan] = box
+    boxes.addStretch(1)
+    layout.addLayout(boxes)
 
-    return app
+    window.chart = plot_seats_votes(curve)
+    layout.addWidget(window.chart, stretch=1)
+
+    def redraw():
+        """Redraw the chart with the plans ticked in the checkboxes."""
+        ticked = [plan for plan, box in window.checkboxes.items() if box.isChecked()]
+        plot_seats_votes(curve, ticked, widget=window.chart)
+
+    for box in window.checkboxes.values():
+        box.toggled.connect(redraw)
+    return window
+
+
+def show_seats_votes(curve):
+    """
+    Open the seats-votes window and wait until it is closed.
+
+    Parameters
+    ----------
+    curve : pandas.DataFrame
+        Output of ``seats_votes_curve``.
+
+    Returns
+    -------
+    int
+        Qt's exit code.
+
+    Notes
+    -----
+    For scripts and ``python -m redistricting.seats_votes``. Code that is
+    already running Qt, such as the metrics GUI, should call
+    ``seats_votes_window(curve).show()`` instead, since this starts Qt's
+    event loop and waits.
+    """
+    app = _qt_app()
+    window = seats_votes_window(curve)
+    window.show()
+    return app.exec_()
 
 
 # ---------------------------------------------------------------------------
@@ -468,5 +588,5 @@ if __name__ == "__main__":
     assert [seats_at("plan_b", v) for v in (0.45, 0.5, 0.55)] == [2, 2, 2]
     print("seats_votes_curve test passed")
 
-    # serves the chart at http://127.0.0.1:8050; Ctrl+C stops it
-    seats_votes_app(curve).run()
+    # opens the chart in a window; close the window to stop
+    show_seats_votes(curve)
