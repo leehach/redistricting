@@ -4,13 +4,15 @@ channels:
 dependencies:
   - python
   # required
+  - dash
   - esda
   - geopandas
   - glpk
   - matplotlib
   - numpy
-  - pyomo
   - pandas
+  - plotly
+  - pyomo
   - shapely
   # DEA scripts (dea_pcp.py, dea_frontier_app.py, dea_frontier_app_qt.py)
   - scipy
