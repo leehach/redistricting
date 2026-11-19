@@ -15,7 +15,7 @@ def tiny_plans() -> Plans:
          "ALAND": [1, 1, 1], "AWATER": [0, 0, 0]},
         geometry=[shapely_geometry.box(i, 0, i + 1, 1) for i in range(3)], crs="EPSG:4269")
     census = pd.DataFrame({"GEOID": GEOIDS, "VTD_NAME_CENSUS": ["A", "B", "C"],
-                           "COUNTYFP": ["001"] * 3, "pop_total": [100, 200, 300]})
+                           "COUNTYFP": ["001"] * 3, "pop": [100, 200, 300]})
     assignments = {
         "plan_a": pd.DataFrame({"GEOID": GEOIDS[:2], "district": [1, 2]}),
         "plan_b": pd.DataFrame({"GEOID": GEOIDS, "district": [2, 2, 1]}),
@@ -32,7 +32,7 @@ def test_get_keeps_every_voting_district():
 
 def test_get_joins_census_without_duplicate_columns():
     df = tiny_plans().get("plan_a", geometry=False)
-    assert df.set_index("GEOID").loc["42001000020", "pop_total"] == 200
+    assert df.set_index("GEOID").loc["42001000020", "pop"] == 200
     assert "VTD_NAME_CENSUS" not in df.columns
     assert df.columns.tolist().count("COUNTYFP") == 1
 

@@ -2,14 +2,30 @@
 
 STATE_FIPS = "42"          # Pennsylvania
 N_DISTRICTS = 50           # PA Senate seats
-GEOID_LENGTH = 11          # 2020 VTD GEOID: state (2) + county (3) + VTD (6)
 
-# Citizen plan CSVs (GEOID20 -> District), one file per plan
-PLANS_OWNER = "ccfdpa"
-PLANS_REPO = "pa-citizen-redistricting-plans-2020"
-PLANS_BRANCH = "main"
-PLANS_FOLDER = "pa-senate"
-PLAN_HEADER = ["GEOID20", "District"]
+# --- Plans (any state) ---------------------------------------------------------
+# Where plans are read from. One of:
+#   a CSV file       one plan (GEOID, district) or several in long format (GEOID, plan, district)
+#   a folder         every CSV in it
+#   a GitHub folder  https://github.com/<owner>/<repo>/tree/<branch>/<folder>
+# None: the scripts ask for a path when they run.
+PLANS_SOURCE = None
+
+# The PA Senate citizen plans used for testing
+EXAMPLE_PLANS_SOURCE = ("https://github.com/ccfdpa/pa-citizen-redistricting-plans-2020/"
+                        "tree/main/pa-senate")
+
+# --- Census + election data (any state) ------------------------------------------
+# None: download the ALARM Project's file for the state (census + VEST elections).
+# Or a path to your own CSV in ALARM's format: one row per 2020 voting district
+# (Census block in CA, HI, OR), a GEOID20 or GEOID column, ALARM's demographic
+# columns (pop, pop_hisp, ..., vap_two) and its election columns (ndv, nrv, ...).
+VEST_SOURCE = None
+
+# Accepted plan column names (case-insensitive); the first match is used
+GEOID_COLUMNS = ["geoid20", "geoid", "geoid_20"]
+DISTRICT_COLUMNS = ["district", "district_id", "districtid", "cd", "dist"]
+PLAN_NAME_COLUMNS = ["plan", "plan_name", "map", "map_name"]
 
 # 2020 Census TIGER/Line voting-district shapes for PA
 VTD_URL = ("https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/"
@@ -22,3 +38,12 @@ CENSUS_KEY_SIGNUP_URL = "https://api.census.gov/data/key_signup.html"
 # Votes per 2020 voting district (ALARM Project)
 ELECTIONS_URL = ("https://raw.githubusercontent.com/alarm-redist/census-2020/"
                  "main/census-vest-2020/pa_2020_vtd.csv")
+
+# --- Any state (state_data.py) ----------------------------------------------
+# Census TIGER/Line 2020 shapes: <root><fips>_<STATE_NAME>/<fips>/tl_2020_<fips>_<layer>.zip
+# layer is vtd20 (voting districts) or tabblock20 (Census blocks)
+TIGER_STATE_ROOT = "https://www2.census.gov/geo/tiger/TIGER2020PL/STATE/"
+
+# ALARM Project census + VEST election data: <abbr>_2020_<level>.csv, level vtd or block
+ALARM_STATE_URL = ("https://raw.githubusercontent.com/alarm-redist/census-2020/"
+                   "main/census-vest-2020/{abbr}_2020_{level}.csv")

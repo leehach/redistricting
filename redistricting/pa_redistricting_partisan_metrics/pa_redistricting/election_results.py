@@ -31,7 +31,8 @@ ELECTIONS = {
 
 
 def fetch_elections() -> pd.DataFrame:
-    """VTD election results with GEOID20 renamed to GEOID."""
+    """The whole VEST file, with GEOID20 renamed to GEOID: votes AND demographics.
+    Pass it to demographics.vest_demographics() or Plans.load(vest=...) to reuse it."""
     log.info("Downloading VTD election results from the ALARM Project ...")
     r = requests.get(ELECTIONS_URL, timeout=300)
     r.raise_for_status()

@@ -9,14 +9,14 @@ def two_district_plan():
     return pd.DataFrame({
         "district":     pd.array([1, 1, 2, None], dtype="Int64"),
         "COUNTYFP":     ["001", "003", "001", "005"],
-        "pop_total":    [100, 50, 140, 10],
-        "pop_hispanic": [10, 20, 14, 0],
-        "pop_nh_white": [80, 20, 100, 10],
-        "pop_nh_black": [5, 20, 20, 0],
-        "vap_total":    [80, 40, 100, 8],
-        "vap_hispanic": [8, 16, 10, 0],
-        "vap_nh_white": [40, 10, 70, 8],
-        "vap_nh_black": [4, 20, 15, 0],
+        "pop":    [100, 50, 140, 10],
+        "pop_hisp": [10, 20, 14, 0],
+        "pop_white": [80, 20, 100, 10],
+        "pop_black": [5, 20, 20, 0],
+        "vap":    [80, 40, 100, 8],
+        "vap_hisp": [8, 16, 10, 0],
+        "vap_white": [40, 10, 70, 8],
+        "vap_black": [4, 20, 15, 0],
     })
 
 
@@ -29,7 +29,7 @@ def test_ideal_counts_unassigned_people():
 
 def test_deviation_from_ideal():
     out, _ = population_summary(two_district_plan(), n_districts=2)
-    assert out["pop_total"].tolist() == [150, 140]
+    assert out["pop"].tolist() == [150, 140]
     assert out["deviation"].tolist() == [0, -10]
     assert out["pct_deviation"].tolist() == pytest.approx([0.0, -6.67])
 

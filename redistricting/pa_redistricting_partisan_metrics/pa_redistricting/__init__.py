@@ -14,8 +14,12 @@ from .census import MissingAPIKeyError
 from .election_results import fetch_elections
 from .maps import plot_plan
 from .partisan_metrics import partisan_summary
+from .plan_assignments import read_plan, read_plans
 from .plans import Plans
 from .population import population_summary
+from .state_data import load_state, pick_state
+from .state_metrics import score_plan
 
 __all__ = ["MissingAPIKeyError", "Plans", "fetch_elections", "partisan_summary", "plot_plan",
-           "population_summary"]
+           "population_summary", "load_state", "pick_state",
+           "read_plan", "read_plans", "score_plan"]
