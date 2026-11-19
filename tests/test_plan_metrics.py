@@ -5,7 +5,8 @@ Run from the top folder of the project:
 
     python -m pytest tests/test_plan_metrics.py -v
 
-These use a hand-made table of four geounits, so they need no download.
+These use the four hand-made geounits in conftest.py, so they need no
+download.
 """
 
 import geopandas as gpd
@@ -17,19 +18,9 @@ from redistricting.plan_metrics import COUNTY_SPLIT_DIRECTION, DIRECTION
 
 
 @pytest.fixture
-def geounits():
-    """Two counties of 200 people. District 2 takes 50 people from county B."""
-    return pd.DataFrame({
-        "population": [100, 100, 150, 50],
-        "county":     ["A", "A", "B", "B"],
-        "dem":        [60, 40, 70, 20],
-        "rep":        [40, 60, 80, 30],
-    }, index=["g1", "g2", "g3", "g4"])
-
-
-@pytest.fixture
-def plan():
-    return pd.Series([1, 1, 2, 1], index=["g1", "g2", "g3", "g4"])
+def plan(plans):
+    """District 2 takes 50 people from county B."""
+    return plans["p1"]
 
 
 def test_county_split_direction_matches_county_split_module():
@@ -58,3 +49,29 @@ def test_measure_plan_default_is_split_counties_only(geounits, plan):
 def test_measure_rejects_unknown_county_metric():
     with pytest.raises(ValueError, match="Unknown county-split metric"):
         plan_metrics.measure(pd.DataFrame(), gpd.GeoDataFrame(), ["bogus"])
+
+
+def test_measure_default_columns_are_direction(geounits, plans):
+    table = plan_metrics.measure(plans, geounits)
+    assert list(table.columns) == list(DIRECTION)
+    assert list(table.index) == list(plans.columns)
+
+
+def test_measure_adds_county_metrics_after_direction(geounits, plans):
+    table = plan_metrics.measure(plans, geounits, list(COUNTY_SPLIT_DIRECTION))
+    # split_counties is in DIRECTION already, so it is not added twice
+    assert list(table.columns) == list(DIRECTION) + [
+        "county_split_intersections", "spill_ratio", "county_hhi"]
+
+
+def test_measure_county_values_per_plan(geounits, plans):
+    table = plan_metrics.measure(plans, geounits, list(COUNTY_SPLIT_DIRECTION))
+    # p1: only county B is split, 150 / 50
+    assert table.loc["p1", "split_counties"] == 1
+    assert table.loc["p1", "spill_ratio"] == pytest.approx(50 / 400)
+    # p3: A is split 100 / 100 and B 150 / 50, so 100 + 50 people spill.
+    # HHI: A scores 0.5^2 + 0.5^2 = 0.5, B scores 0.625.
+    assert table.loc["p3", "split_counties"] == 2
+    assert table.loc["p3", "county_split_intersections"] == 4
+    assert table.loc["p3", "spill_ratio"] == pytest.approx(150 / 400)
+    assert table.loc["p3", "county_hhi"] == pytest.approx((0.5 + 0.625) / 2)

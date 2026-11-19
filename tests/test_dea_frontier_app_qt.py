@@ -34,11 +34,14 @@ from PyQt5.QtCore import QEvent
 from PyQt5.QtWidgets import QApplication, QLabel, QPushButton
 
 from redistricting import dea_frontier_app_qt as app_module
+from redistricting import plan_metrics
+from redistricting.DEA import dea
 from redistricting.dea_frontier_app_qt import (
     DEFAULT_METRICS,
     MOCK_COUNTY_METHODS,
     STATUS_LABELS,
     FrontierWindow,
+    PlanLoader,
     fmt,
     frontier_targets,
     make_mock_metrics,
@@ -46,6 +49,8 @@ from redistricting.dea_frontier_app_qt import (
     off_frontier,
     pareto_2d,
     run_dea,
+    sbm_rescorer,
+    score_sbm,
     staircase,
 )
 
@@ -629,3 +634,98 @@ def test_failed_rescore_keeps_old_measure(qapp, mock_metrics, monkeypatch):
     assert "County_Splits" in w.metrics
     assert w.results.equals(before)
     w.close()
+
+
+# --------------------------------------------------------------------------
+# Real plans: measured by plan_metrics, scored with SBM
+# --------------------------------------------------------------------------
+# These use the four hand-made geounits and five plans in conftest.py in
+# place of the PA download. In that data, p4 is on the frontier when the
+# county measure is the Herfindahl index (higher is better), and off it
+# with split counties, or if the index were read as lower is better.
+COUNTY_COLUMNS = list(plan_metrics.DIRECTION) + [
+    "county_split_intersections", "spill_ratio", "county_hhi"]
+
+
+@pytest.fixture
+def plan_table(geounits, plans):
+    """What PlanLoader measures: DIRECTION plus every county measure."""
+    return plan_metrics.measure(
+        plans, geounits, list(plan_metrics.COUNTY_SPLIT_DIRECTION))
+
+
+def efficient_of(results, plan_id):
+    return int(row_of(results, plan_id)["DEA_Efficient"])
+
+
+def test_score_sbm_scores_only_the_given_metrics(plan_table):
+    # dea.score rejects columns with no direction, so the extra county
+    # measures in the table must be left out
+    direction = plan_metrics.DIRECTION
+    results = score_sbm(plan_table, direction)
+    assert "spill_ratio" not in results.columns
+    expected = dea.score(plan_table[list(direction)], direction, "sbm")
+    assert results["DEA_Score"].to_numpy() == pytest.approx(expected.to_numpy())
+
+
+def test_sbm_rescorer_swaps_county_measure(plan_table):
+    rescore = sbm_rescorer(plan_table)
+    with_splits = app_module._higher_is_better(plan_metrics.DIRECTION)
+    with_hhi = {("county_hhi" if m == "split_counties" else m): hb
+                for m, hb in with_splits.items()}
+    with_hhi["county_hhi"] = True
+
+    assert efficient_of(rescore(with_splits), "p4") == 0
+    assert efficient_of(rescore(with_hhi), "p4") == 1
+    assert efficient_of(rescore({**with_hhi, "county_hhi": False}), "p4") == 0
+
+
+def test_plan_loader_measures_every_county_measure(
+        geounits, plans, tmp_path, monkeypatch):
+    # One "GEOID20,District" file per plan, as Dave's Redistricting App
+    # exports them
+    paths = []
+    for name in plans.columns:
+        path = tmp_path / f"{name}.csv"
+        plans[name].rename("District").rename_axis("GEOID20").to_csv(path)
+        paths.append(str(path))
+    monkeypatch.setattr(PlanLoader, "_geounits", geounits)
+
+    loader = PlanLoader(paths)
+    done, failed = [], []
+    loader.done.connect(done.append)
+    loader.failed.connect(failed.append)
+    loader.run()   # in this thread, in place of start()
+
+    assert failed == []
+    table, results = done[0]
+    assert list(table.columns) == COUNTY_COLUMNS
+    assert sorted(results["Plan_ID"]) == ["p1", "p2", "p3", "p4", "p5"]
+    assert efficient_of(results, "p4") == 0
+
+
+def test_loaded_window_rescores_real_plans(qapp, window, plan_table,
+                                           monkeypatch):
+    monkeypatch.setattr(window, "_progress", QLabel(), raising=False)
+    # A failed rescore opens a modal warning, which would hang the test
+    # with no screen. Record it instead.
+    warnings = []
+    monkeypatch.setattr(app_module.QMessageBox, "warning",
+                        lambda *args: warnings.append(args[2]))
+    results = score_sbm(plan_table, plan_metrics.DIRECTION)
+
+    window._loaded((plan_table, results))
+    w = qapp.frontier_window
+    try:
+        assert not w.countyCombo.isHidden()
+        assert [w.countyCombo.itemData(i) for i in range(w.countyCombo.count())] \
+            == list(plan_metrics.COUNTY_SPLIT_DIRECTION)
+
+        choose_county(w, "county_hhi")
+        assert warnings == []
+        assert w.metrics["county_hhi"] is True
+        assert "split_counties" not in w.metrics
+        assert efficient_of(w.results, "p4") == 1
+    finally:
+        w.close()
+        del qapp.frontier_window
