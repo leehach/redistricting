@@ -28,7 +28,7 @@ def test_state_elections_finds_composite_yearly_and_presidential():
 
 def test_state_elections_none():
     with pytest.raises(ValueError, match="no election columns"):
-        state_elections(STATE[["GEOID", "pop_total"]])
+        state_elections(STATE[["GEOID", "pop"]])
 
 
 def test_read_plan(tmp_path):
@@ -63,7 +63,7 @@ def test_score_plan_matches_hand_calculation():
     assert math.isclose(m["dem_vote_share"], 220 / 500)
     assert math.isclose(m["efficiency_gap"], efficiency_gap(dem, rep))
     assert score.districts["composite"]["winner"].tolist() == ["D", "R", "R"]
-    assert score.population["pop_total"].tolist() == [200, 200, 100]
+    assert score.population["pop"].tolist() == [200, 200, 100]
     assert score.population_stats["unassigned_pop"] == 100
 
 
@@ -73,5 +73,15 @@ def test_score_plan_ignores_geometry_column():
 
 
 def test_score_plan_from_another_state():
-    with pytest.raises(ValueError, match="None of the plan's GEOIDs"):
+    with pytest.raises(ValueError, match="start with 42 but the state's start with 37"):
         score_plan(pd.DataFrame({"GEOID": ["42000000000"], "district": [1]}), STATE)
+
+
+def test_score_plan_right_state_but_no_matching_geoids():
+    with pytest.raises(ValueError, match="None of the plan's GEOIDs"):
+        score_plan(pd.DataFrame({"GEOID": ["37999999999"], "district": [1]}), STATE)
+
+
+def test_score_plan_empty_plan():
+    with pytest.raises(ValueError, match="assigns no voting districts"):
+        score_plan(pd.DataFrame({"GEOID": pd.Series(dtype=str), "district": []}), STATE)

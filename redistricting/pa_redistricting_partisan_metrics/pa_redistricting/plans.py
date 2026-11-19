@@ -68,12 +68,13 @@ class Plans:
 
     @classmethod
     def load(cls, demographics: DemographicsSource = "vest", census_api_key: str | None = None,
-             vest: pd.DataFrame | None = None) -> Plans:
+             vest: pd.DataFrame | None = None, plans_source: str | None = None) -> Plans:
         """Download the shapes, the demographic data and every plan.
         See load_demographics for the choices. Pass vest (from fetch_elections())
-        to avoid downloading the VEST file twice."""
+        to avoid downloading the VEST file twice. plans_source is a CSV, folder or
+        GitHub folder URL (default: config.PLANS_SOURCE, else the example PA plans)."""
         return cls(load_vtds(), load_demographics(demographics, census_api_key, vest),
-                   fetch_plan_assignments())
+                   fetch_plan_assignments(plans_source))
 
     @staticmethod
     def _clean_demographics(demo: pd.DataFrame) -> pd.DataFrame:
@@ -111,7 +112,7 @@ class Plans:
         df = df.merge(self.demographics, on="GEOID", how="left")
         df = df.sort_values(["district", "GEOID"]).reset_index(drop=True)
 
-        unmatched = df["pop_total"].isna().sum()
+        unmatched = df["pop"].isna().sum()
         if unmatched:
             log.warning("%s: %d voting districts without demographic data", plan, unmatched)
 

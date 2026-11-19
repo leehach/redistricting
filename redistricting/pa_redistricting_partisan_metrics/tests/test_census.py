@@ -64,7 +64,7 @@ def test_fetch_census_builds_geoids_and_counts(monkeypatch):
     assert all(url.endswith("&key=abc") for url in urls)
     assert df["GEOID"].iloc[0] == "42001000010"
     assert df["GEOID"].str.len().eq(11).all()
-    assert str(df["pop_total"].dtype) == "Int64"
+    assert str(df["pop"].dtype) == "Int64"
     assert df["pct_hispanic"].iloc[0] == 100.0
 
 

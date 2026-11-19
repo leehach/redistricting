@@ -2,23 +2,23 @@ import pandas as pd
 import pytest
 
 from pa_redistricting import census
-from pa_redistricting.demographics import (COUNT_COLUMNS, VEST_COLUMNS, compare_sources,
-                                           vest_demographics)
+from pa_redistricting.demographics import COUNT_COLUMNS, compare_sources, vest_demographics
 
 GEOIDS = ["42001000010", "42001000020"]
 
 
 def tiny_vest() -> pd.DataFrame:
-    df = pd.DataFrame({"GEOID": GEOIDS, **{c: [100, 50] for c in VEST_COLUMNS}})
+    df = pd.DataFrame({"GEOID": GEOIDS, **{c: [100, 50] for c in COUNT_COLUMNS}})
     df["pop_white"] = [70, 30]           # VEST: non-Hispanic White
     df["pre_20_dem_bid"] = [40.5, 20.0]  # vote columns are ignored
     return df
 
 
-def test_vest_white_becomes_nh_white():
+def test_vest_columns_keep_their_names():
     demo = vest_demographics(tiny_vest())
-    assert demo["pop_nh_white"].tolist() == [70, 30]
-    assert "pop_white" not in demo.columns
+    assert demo.columns[1:len(COUNT_COLUMNS) + 1].tolist() == COUNT_COLUMNS
+    assert demo["pop_white"].tolist() == [70, 30]
+    assert demo["pct_nh_white"].tolist() == [70.0, 60.0]
     assert "pre_20_dem_bid" not in demo.columns
 
 
@@ -34,13 +34,15 @@ def test_vest_missing_column_raises():
         vest_demographics(tiny_vest().drop(columns="pop_hisp"))
 
 
-def test_census_shared_columns_match_vest():
+def test_census_uses_vest_names_for_shared_counts():
     assert list(census.SHARED_VARIABLES.values()) == COUNT_COLUMNS
+    assert census.SHARED_VARIABLES["P2_005N"] == "pop_white"        # non-Hispanic White
+    assert census.SHARED_VARIABLES["P2_011N"] == "pop_two"          # VEST's "two"
+    assert census.EXTRA_VARIABLES["P1_003N"] == "pop_white_incl_hisp"
 
 
 def test_census_only_columns_do_not_collide():
     assert not set(census.EXTRA_COLUMNS) & set(COUNT_COLUMNS)
-    assert "pop_white" not in census.VARIABLES.values()
     assert len(census.VARIABLES) < 50   # Census API limit per request
 
 
@@ -55,11 +57,11 @@ def test_compare_identical_sources():
 def test_compare_finds_differences_and_missing_geoids():
     vest = vest_demographics(tiny_vest())
     other = vest.copy()
-    other.loc[0, "pop_total"] += 5
+    other.loc[0, "pop"] += 5
     other.loc[2] = other.loc[1].copy()
     other.loc[2, "GEOID"] = "42003000010"
     table, only = compare_sources(vest, other)
-    row = table.set_index("column").loc["pop_total"]
+    row = table.set_index("column").loc["pop"]
     assert row["vtds_differ"] == 1
     assert row["difference"] == -5
     assert only == {"only_vest": [], "only_census": ["42003000010"]}
@@ -80,4 +82,4 @@ def test_vest_plus_census_adds_extra_columns(monkeypatch):
     demo = plans.load_demographics("vest+census", vest=tiny_vest())
     assert demo["gq_correctional"].tolist() == [1, 2]
     assert "pct_vacant" in demo.columns
-    assert demo["pop_nh_white"].tolist() == [70, 30]
+    assert demo["pop_white"].tolist() == [70, 30]

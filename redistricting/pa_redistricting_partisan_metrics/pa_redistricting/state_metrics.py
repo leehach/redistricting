@@ -3,32 +3,31 @@
 The same calculations as the PA Senate workflow (partisan_metrics.py and
 population.py), for a state loaded with state_data.load_state:
 
+    from pa_redistricting.plan_assignments import read_plans
     from pa_redistricting.state_data import load_state
-    from pa_redistricting.state_metrics import read_plan, score_plan
+    from pa_redistricting.state_metrics import score_plan
     gdf, _ = load_state("NC")
-    score = score_plan(read_plan("nc_congress.csv"), gdf)
+    for plan in read_plans("nc_plans/"):          # a CSV, a folder or a GitHub folder
+        score = score_plan(plan.assignment, gdf)
     score.metrics      # one row per election: seats, efficiency gap, partisan bias, ...
     score.districts    # {election: votes and winner per district}
     score.population   # population and deviation per district
 
-A plan is a CSV with one row per voting district (Census block in CA, HI, OR):
-a GEOID column (GEOID20 or GEOID) and a district column (District or district).
+Plans are read by plan_assignments.read_plans (one row per voting district, or
+Census block in CA, HI, OR; see that module for the accepted formats).
 """
 
 import logging
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import pandas as pd
 
 from .partisan_metrics import partisan_summary
+from .plan_assignments import plan_name, read_plan  # noqa: F401  (kept importable here)
 from .population import population_summary
 
 log = logging.getLogger(__name__)
-
-GEOID_NAMES = ["geoid20", "geoid", "geoid_20"]
-DISTRICT_NAMES = ["district", "district_id", "districtid", "cd", "dist"]
 
 
 @dataclass
@@ -67,52 +66,32 @@ def state_elections(votes: pd.DataFrame) -> dict[str, tuple[str, str]]:
     return elections
 
 
-def _column(df: pd.DataFrame, names: list[str], what: str) -> str:
-    by_lower = {c.strip().lower(): c for c in df.columns}
-    for n in names:
-        if n in by_lower:
-            return by_lower[n]
-    raise ValueError(f"No {what} column; expected one of {names}, found {list(df.columns)}")
-
-
-def read_plan(path: str | Path) -> pd.DataFrame:
-    """Read a plan CSV into GEOID (text) and district (whole number).
-    Rows with a blank district are treated as unassigned and dropped."""
-    raw = pd.read_csv(path, dtype=str, skipinitialspace=True, encoding="utf-8-sig")
-    geoid = _column(raw, GEOID_NAMES, "GEOID")
-    district = _column(raw, DISTRICT_NAMES, "district")
-    df = raw[[geoid, district]].set_axis(["GEOID", "district"], axis=1)
-    df["GEOID"] = df["GEOID"].str.strip()
-    df = df[df["district"].str.strip().fillna("") != ""]
-    try:
-        df["district"] = df["district"].astype(int)
-    except ValueError:
-        raise ValueError(f"{path}: district values must be whole numbers, e.g. 1, 2, 3")
-    return df.reset_index(drop=True)
-
-
-def plan_name(path: str | Path) -> str:
-    """File name without extension, with anything but letters, digits, _ and - as _."""
-    return "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in Path(path).stem)
-
-
 def score_plan(plan: pd.DataFrame, state: pd.DataFrame,
                elections: dict[str, tuple[str, str]] | None = None) -> PlanScore:
     """Partisan metrics (efficiency gap, partisan bias, mean-median, declination)
     and population balance for one plan.
 
-    plan:  GEOID and district (read_plan)
+    plan:  GEOID and district (a Plan's assignment from read_plans)
     state: the joined table from load_state (with or without geometry)
     """
     data = pd.DataFrame(state.drop(columns="geometry", errors="ignore"))
     elections = elections or state_elections(data)
+    if plan.empty:
+        raise ValueError("The plan assigns no voting districts")
 
-    missing = sorted(set(plan["GEOID"]) - set(data["GEOID"]))
+    plan_fips = plan["GEOID"].str[:2].mode()[0]
+    state_fips = data["GEOID"].str[:2].mode()[0]
+    if plan_fips != state_fips:
+        raise ValueError(f"This plan's GEOIDs start with {plan_fips} but the state's start "
+                         f"with {state_fips}: is it a plan for a different state?")
+
+    plan_ids, data_ids = set(plan["GEOID"]), set(data["GEOID"])
+    missing = sorted(plan_ids - data_ids)
     if missing:
         log.warning("%d of the plan's GEOIDs are not in this state's data, e.g. %s. "
-                    "Is the plan for this state, and at the right level (VTD or block)?",
+                    "Is the plan at the right level (VTD or block)?",
                     len(missing), missing[0])
-    if len(missing) == len(plan):
+    if not plan_ids & data_ids:
         raise ValueError("None of the plan's GEOIDs are in this state's data")
 
     metrics, districts = partisan_summary(plan, data, elections)

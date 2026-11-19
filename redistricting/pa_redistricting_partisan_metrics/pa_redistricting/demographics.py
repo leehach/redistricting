@@ -1,14 +1,15 @@
-"""Demographic counts per PA voting district, with one set of column names
+"""Demographic counts per voting district, using VEST's column names
 whichever source they come from.
 
 VEST (via the ALARM Project) and the Census API both come from the 2020
 PL 94-171 release. Race columns are NON-HISPANIC unless the name says otherwise:
 
-    pop_hispanic       Hispanic or Latino, any race
-    pop_nh_white       White alone, not Hispanic      (VEST: pop_white)
-    pop_nh_black       Black alone, not Hispanic      (VEST: pop_black)
-    ...                aian, asian, nhpi, other, two_plus
-    vap_*              the same, for the voting-age (18+) population
+    pop               total population
+    pop_hisp          Hispanic or Latino, any race
+    pop_white         White alone, not Hispanic
+    pop_black         Black alone, not Hispanic
+    ...               aian, asian, nhpi, other, two (two or more races)
+    vap, vap_*        the same, for the voting-age (18+) population
 
     from pa_redistricting import fetch_elections
     from pa_redistricting.demographics import vest_demographics, compare_sources
@@ -21,29 +22,20 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-RACES = ["white", "black", "aian", "asian", "nhpi", "other", "two_plus"]
-VEST_RACES = ["white", "black", "aian", "asian", "nhpi", "other", "two"]
+RACES = ["white", "black", "aian", "asian", "nhpi", "other", "two"]
 
-# Counts every demographics source provides, in this order
+# Counts every demographics source provides (VEST's names), in this order
 COUNT_COLUMNS = [
-    "pop_total", "pop_hispanic", *[f"pop_nh_{r}" for r in RACES],
-    "vap_total", "vap_hispanic", *[f"vap_nh_{r}" for r in RACES],
+    "pop", "pop_hisp", *[f"pop_{r}" for r in RACES],
+    "vap", "vap_hisp", *[f"vap_{r}" for r in RACES],
 ]
-
-# VEST column -> package column
-VEST_COLUMNS = {
-    "pop": "pop_total", "pop_hisp": "pop_hispanic",
-    "vap": "vap_total", "vap_hisp": "vap_hispanic",
-    **{f"{p}_{v}": f"{p}_nh_{r}"
-       for p in ("pop", "vap") for v, r in zip(VEST_RACES, RACES)},
-}
 
 # Percentage columns: name -> (numerator, denominator). Added only when both exist.
 PERCENTAGES = {
-    "pct_hispanic": ("pop_hispanic", "pop_total"),
-    "pct_nh_white": ("pop_nh_white", "pop_total"),
-    "pct_nh_black": ("pop_nh_black", "pop_total"),
-    "pct_vap": ("vap_total", "pop_total"),
+    "pct_hispanic": ("pop_hisp", "pop"),
+    "pct_nh_white": ("pop_white", "pop"),
+    "pct_nh_black": ("pop_black", "pop"),
+    "pct_vap": ("vap", "pop"),
     "pct_vacant": ("housing_vacant", "housing_total"),
 }
 
@@ -60,13 +52,12 @@ def add_percentages(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def vest_demographics(vest: pd.DataFrame) -> pd.DataFrame:
-    """The demographic columns of the VEST file (fetch_elections()), renamed to
-    COUNT_COLUMNS. One row per voting district, keyed by GEOID."""
-    missing = [c for c in VEST_COLUMNS if c not in vest.columns]
+    """The demographic columns of the VEST file (fetch_elections()) as whole
+    numbers, plus percentages. One row per voting district, keyed by GEOID."""
+    missing = [c for c in COUNT_COLUMNS if c not in vest.columns]
     if missing:
         raise ValueError(f"VEST file is missing demographic columns: {', '.join(missing)}")
-    df = vest[["GEOID", *VEST_COLUMNS]].rename(columns=VEST_COLUMNS)
-    df[COUNT_COLUMNS] = df[COUNT_COLUMNS].astype("Int64")
+    df = vest[["GEOID", *COUNT_COLUMNS]].astype({c: "Int64" for c in COUNT_COLUMNS})
     return add_percentages(df).sort_values("GEOID").reset_index(drop=True)
 
 

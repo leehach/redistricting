@@ -34,7 +34,7 @@ from pathlib import Path
 import pandas as pd
 from matplotlib.figure import Figure
 
-from pa_redistricting.state_data import STATES, geography, load_state, pick_state
+from pa_redistricting.state_data import STATES, geography, load_state, pick_state, pick_vest
 
 # ---------------------------------------------------------------------------
 # Settings
@@ -71,10 +71,10 @@ COLUMN_NAMES = {
     "AWATER": "water_area_sq_meters",
     "dem_share": "democratic_vote_share",
     "rep_share": "republican_vote_share",
-    "pop_total": "total_population",
-    "pop_hispanic": "hispanic_population",
-    "vap_total": "voting_age_population",
-    "vap_hispanic": "voting_age_hispanic",
+    "pop": "total_population",
+    "pop_hisp": "hispanic_population",
+    "vap": "voting_age_population",
+    "vap_hisp": "voting_age_hispanic",
     "pct_hispanic": "percent_hispanic",
     "pct_nh_white": "percent_white_non_hispanic",
     "pct_nh_black": "percent_black_non_hispanic",
@@ -83,7 +83,7 @@ COLUMN_NAMES = {
     "nrv": "republican_votes_avg_all_elections",
 }
 RACES = {"aian": "american_indian_alaska_native", "nhpi": "native_hawaiian_pacific_islander",
-         "other": "other_race", "two_plus": "two_or_more_races"}
+         "other": "other_race", "two": "two_or_more_races"}
 PARTIES = {"dem": "democratic", "rep": "republican"}
 OFFICES = {"pre": "president", "uss": "us_senate", "gov": "governor",
            "ltg": "lieutenant_governor", "atg": "attorney_general",
@@ -101,7 +101,8 @@ def readable_name(column: str) -> str:
     if m := re.fullmatch(r"(dem|rep)_share_(\d\d)", column):          # dem_share_20
         return f"{PARTIES[m[1]]}_vote_share_20{m[2]}"
 
-    if m := re.fullmatch(r"(pop|vap)_nh_(\w+)", column):              # pop_nh_white
+    # pop_white etc.: VEST's race columns, which are non-Hispanic
+    if m := re.fullmatch(r"(pop|vap)_(white|black|aian|asian|nhpi|other|two)", column):
         race = RACES.get(m[2], m[2])
         if m[1] == "pop":
             return f"{race}_non_hispanic_population"
@@ -124,9 +125,9 @@ def column_order(column: str) -> int:
         return 0                                        # which voting district
     if re.fullmatch(r"(dem|rep)_share(_\d\d)?", column):
         return 1                                        # vote shares
-    if column.startswith("pop_"):
+    if column == "pop" or column.startswith("pop_"):
         return 2                                        # population
-    if column.startswith("vap_"):
+    if column == "vap" or column.startswith("vap_"):
         return 3                                        # voting-age population
     if column.startswith("pct_"):
         return 4                                        # percentages
@@ -174,7 +175,7 @@ def save_map(gdf, title: str, path: Path) -> None:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")   # show progress
     abbr = pick_state()
-    gdf, report = load_state(abbr)
+    gdf, report = load_state(abbr, vest=pick_vest(abbr))      # your own file, or ALARM's
     print_report(abbr, report)
 
     folder = OUT / abbr.lower()

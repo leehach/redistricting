@@ -66,6 +66,13 @@ No command needs a Census key by default. `run`, `summary` and `maps` take
 `--demographics vest` (default), `census` or `vest+census`; the last two need a key.
 Add `-q` to hide progress messages and `--out FOLDER` to change where files go.
 
+**Your own plans or data.** `--plans-source` takes a plan CSV (one plan, or several in long
+format: `GEOID20, plan, District`), a folder of CSVs, or a GitHub folder URL. `--vest` takes
+your own census + election CSV in the ALARM Project's format (same columns as
+`census-vest-2020/pa_2020_vtd.csv`). Set `PLANS_SOURCE` or `VEST_SOURCE` in
+`pa_redistricting/config.py` to use them by default. `score_state_plan.py` and `load_state.py`
+ask for both, for any state; press Enter at the data prompt to use ALARM's file.
+
 ## Python
 
 ```python
@@ -84,20 +91,23 @@ summary, districts = partisan_summary(plans.assignments[plans.names[0]], fetch_e
 
 ## Demographic columns
 
-Both sources come from the 2020 Census redistricting data (PL 94-171) and use the
-same column names. Race columns are **non-Hispanic** unless the name says otherwise:
+Both sources come from the 2020 Census redistricting data (PL 94-171) and use
+VEST's column names. Race columns are **non-Hispanic** unless the name says otherwise:
 
 | Columns | Meaning | Source |
 |---|---|---|
-| `pop_total`, `vap_total` | Total population / voting-age population (18+) | VEST or Census |
-| `pop_hispanic`, `vap_hispanic` | Hispanic or Latino, any race | VEST or Census |
-| `pop_nh_<race>`, `vap_nh_<race>` | Race alone, not Hispanic (`white`, `black`, `aian`, `asian`, `nhpi`, `other`, `two_plus`) | VEST or Census |
+| `pop`, `vap` | Total population / voting-age population (18+) | VEST or Census |
+| `pop_hisp`, `vap_hisp` | Hispanic or Latino, any race | VEST or Census |
+| `pop_<race>`, `vap_<race>` | Race alone, **not Hispanic** (`white`, `black`, `aian`, `asian`, `nhpi`, `other`, `two`) | VEST or Census |
 | `pop_<race>_incl_hisp`, `vap_<race>_incl_hisp` | Race alone, including Hispanics | Census only |
 | `gq_total`, `gq_correctional` | Group quarters; adult correctional facilities | Census only |
 | `housing_total`, `housing_occupied`, `housing_vacant` | Housing units | Census only |
 
-Earlier versions had `pop_white`, `pop_black`, etc. that included Hispanics; those
-columns are now `pop_white_incl_hisp`, etc., and only appear with the Census options.
+Percentage columns (`pct_hispanic`, `pct_nh_white`, `pct_nh_black`, `pct_vap_minority`, ...)
+are computed by the package.
+
+The Census API's codes are mapped to the same names as VEST (for example P2_005N,
+non-Hispanic White, is `pop_white`), so both sources produce identical columns.
 
 VEST demographics were checked against the 2020 Census API on 2026-11-11 with
 `demographics.compare_sources()`: identical for all 9,178 PA voting districts.

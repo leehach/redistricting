@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from . import config
 from .plan_assignments import fetch_plan_assignments
 from .census import MissingAPIKeyError, fetch_codebook
 from .config import N_DISTRICTS
@@ -27,6 +28,7 @@ from .maps import plot_plan
 from .partisan_metrics import METRICS, favors, partisan_summary
 from .plans import DEMOGRAPHICS_SOURCES, Plans
 from .population import population_summary
+from .state_data import read_vest_file
 
 MAP_DPI = 200
 
@@ -62,9 +64,9 @@ def print_population_report(plan: str, out: pd.DataFrame, s: dict) -> None:
     print(f"Districts: {s['districts']}   (expected {N_DISTRICTS})")
     print(f"Ideal population per district: {s['ideal']:,.0f}")
     print(f"Largest:  District {int(s['largest']['district']):>2}  "
-          f"{int(s['largest']['pop_total']):>9,}  ({s['max_pct']:+.2f}%)")
+          f"{int(s['largest']['pop']):>9,}  ({s['max_pct']:+.2f}%)")
     print(f"Smallest: District {int(s['smallest']['district']):>2}  "
-          f"{int(s['smallest']['pop_total']):>9,}  ({s['min_pct']:+.2f}%)")
+          f"{int(s['smallest']['pop']):>9,}  ({s['min_pct']:+.2f}%)")
     print(f"Overall range (largest % minus smallest %): {s['overall_range']:.2f} points")
     if s["unassigned_pop"]:
         print(f"!! {s['unassigned_pop']:,} people live in voting districts this plan left unassigned")
@@ -73,7 +75,7 @@ def print_population_report(plan: str, out: pd.DataFrame, s: dict) -> None:
 
     print("\n district   population   deviation   % dev   VTDs  counties")
     for _, r in out.iterrows():
-        print(f" {int(r['district']):>8}   {int(r['pop_total']):>10,}   {int(r['deviation']):>+9,}"
+        print(f" {int(r['district']):>8}   {int(r['pop']):>10,}   {int(r['deviation']):>+9,}"
               f"   {r['pct_deviation']:>+5.2f}   {int(r['n_vtds']):>4}   {int(r['n_counties']):>7}")
 
 
@@ -193,7 +195,8 @@ def write_results(plans: Plans, chosen: list[str], out: Path, votes: pd.DataFram
 
 def run_everything(plans: str | list[str] = "all", out: str | Path = "results",
                    data: Plans | None = None, votes: pd.DataFrame | None = None,
-                   demographics: str = "vest") -> Path:
+                   demographics: str = "vest", plans_source: str | None = None,
+                   vest_source: str | None = None) -> Path:
     """Everything the run command does, callable from a script, notebook or IDE.
 
     plans: "all", one word, or a list of words matched against plan names.
@@ -201,6 +204,10 @@ def run_everything(plans: str | list[str] = "all", out: str | Path = "results",
     data:  an already loaded Plans; downloaded with Plans.load() if left out.
     votes: the VEST file from fetch_elections(); downloaded if left out.
     demographics: "vest", "census" or "vest+census" (used only when data is left out).
+    plans_source: CSV, folder or GitHub folder URL of the plans (used only when
+                  data is left out; default config.PLANS_SOURCE, else the example PA plans).
+    vest_source: your own ALARM-format CSV for PA (used only when votes is left out;
+                 default config.VEST_SOURCE, else the ALARM Project's file).
     Returns the path of overview.csv.
     """
     words = [plans] if isinstance(plans, str) else list(plans)
@@ -208,21 +215,34 @@ def run_everything(plans: str | list[str] = "all", out: str | Path = "results",
         raise ValueError('plans is empty; use "all" or a list of words from plan names')
 
     if votes is None:
-        votes = fetch_elections()
+        votes = load_votes(vest_source)
     if data is None:
-        data = Plans.load(demographics, vest=votes)
+        data = Plans.load(demographics, vest=votes, plans_source=plans_source)
     chosen = data.names if words == ["all"] else data.match(words)
     if not chosen:
         raise ValueError(f"No plan names contain: {', '.join(words)}")
     return write_results(data, chosen, Path(out), votes)
 
 
+def user_votes(vest_source: str | None) -> pd.DataFrame | None:
+    """Your own ALARM-format CSV for PA (vest_source, else config.VEST_SOURCE),
+    or None when neither is set."""
+    source = vest_source or config.VEST_SOURCE
+    return read_vest_file(source, "PA") if source else None
+
+
+def load_votes(vest_source: str | None) -> pd.DataFrame:
+    """Your own ALARM-format CSV for PA if one is set, else the ALARM Project's PA file."""
+    votes = user_votes(vest_source)
+    return votes if votes is not None else fetch_elections()
+
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
 def cmd_run(args) -> None:
-    votes = fetch_elections()
-    plans = Plans.load(args.demographics, vest=votes)
+    votes = load_votes(args.vest)
+    plans = Plans.load(args.demographics, vest=votes, plans_source=args.plans_source)
     chosen = choose_plans(plans.names, args.plans, args.all)
     if chosen:
         write_results(plans, chosen, args.out, votes)
@@ -230,13 +250,14 @@ def cmd_run(args) -> None:
 
 def cmd_list(args) -> None:
     vtds = load_vtds()
-    for i, (name, assign) in enumerate(fetch_plan_assignments().items(), 1):
+    for i, (name, assign) in enumerate(fetch_plan_assignments(args.plans_source).items(), 1):
         missing = (~vtds["GEOID"].isin(assign["GEOID"])).sum()
         print(f"{i:>3}. {name}" + (f"  ({missing} voting districts unassigned)" if missing else ""))
 
 
 def cmd_summary(args) -> None:
-    plans = Plans.load(args.demographics)
+    plans = Plans.load(args.demographics, vest=user_votes(args.vest),
+                       plans_source=args.plans_source)
     for plan in choose_plans(plans.names, args.plans, args.all):
         path, table, stats = write_summary(plans, plan, args.out)
         print_population_report(plan, table, stats)
@@ -244,7 +265,8 @@ def cmd_summary(args) -> None:
 
 
 def cmd_maps(args) -> None:
-    plans = Plans.load(args.demographics)
+    plans = Plans.load(args.demographics, vest=user_votes(args.vest),
+                       plans_source=args.plans_source)
     chosen = choose_plans(plans.names, args.plans, args.all)
     for i, plan in enumerate(chosen, 1):
         path = write_map(plans, plan, args.out)
@@ -253,11 +275,11 @@ def cmd_maps(args) -> None:
 
 def cmd_partisan(args) -> None:
     # Plans and votes only: no shapes and no Census key needed
-    assignments = fetch_plan_assignments()
+    assignments = fetch_plan_assignments(args.plans_source)
     chosen = choose_plans(list(assignments), args.plans, args.all)
     if not chosen:
         return
-    votes = fetch_elections()
+    votes = load_votes(args.vest)
     elections = available_elections(votes)
 
     summaries = []
@@ -280,7 +302,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-q", "--quiet", action="store_true", help="hide progress messages")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("list", help="list plans and unassigned voting districts").set_defaults(func=cmd_list)
+    plans_help = ("CSV (one plan, or several in long format), folder, or GitHub folder URL "
+                  "of the plans (default: PLANS_SOURCE in config.py, else the example PA plans)")
+
+    lst = sub.add_parser("list", help="list plans and unassigned voting districts")
+    lst.add_argument("--plans-source", help=plans_help)
+    lst.set_defaults(func=cmd_list)
     sub.add_parser("codebook", help="show Census column labels").set_defaults(func=cmd_codebook)
 
     for name, func, default_out, help_text in [
@@ -293,6 +320,10 @@ def build_parser() -> argparse.ArgumentParser:
         cmd.add_argument("plans", nargs="*", help="words to match in plan names")
         cmd.add_argument("--all", action="store_true", help="every plan")
         cmd.add_argument("--out", type=Path, default=Path(default_out), help="output folder")
+        cmd.add_argument("--plans-source", help=plans_help)
+        cmd.add_argument("--vest", help="your own census + election data CSV for PA in the "
+                                        "ALARM Project's format (default: VEST_SOURCE in "
+                                        "config.py, else ALARM's file)")
         if name != "partisan":
             cmd.add_argument("--demographics", choices=DEMOGRAPHICS_SOURCES, default="vest",
                              help="vest (default, no API key), census, or vest+census "
@@ -307,5 +338,5 @@ def main(argv: list[str] | None = None) -> None:
                         format="%(message)s")
     try:
         args.func(args)
-    except MissingAPIKeyError as e:
+    except (MissingAPIKeyError, FileNotFoundError) as e:
         raise SystemExit(str(e)) from None

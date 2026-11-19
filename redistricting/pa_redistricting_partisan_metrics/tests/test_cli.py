@@ -1,7 +1,9 @@
 import pandas as pd
 import pytest
 
+from pa_redistricting import cli
 from pa_redistricting.cli import build_parser, choose_plans, run_everything
+from pa_redistricting.demographics import COUNT_COLUMNS
 
 PLANS = ["allentown_map", "ccfd_plan", "other_plan"]
 
@@ -52,10 +54,10 @@ def tiny_plans():
          "ALAND": [1, 1, 1], "AWATER": [0, 0, 0]},
         geometry=[shapely_geometry.box(i, 0, i + 1, 1) for i in range(3)], crs="EPSG:4269")
     census = pd.DataFrame({
-        "GEOID": geoids, "pop_total": [100, 200, 300], "pop_hispanic": [10, 20, 30],
-        "pop_nh_white": [80, 100, 150], "pop_nh_black": [5, 60, 100],
-        "vap_total": [80, 160, 240], "vap_hispanic": [8, 16, 24],
-        "vap_nh_white": [60, 80, 100], "vap_nh_black": [4, 50, 90],
+        "GEOID": geoids, "pop": [100, 200, 300], "pop_hisp": [10, 20, 30],
+        "pop_white": [80, 100, 150], "pop_black": [5, 60, 100],
+        "vap": [80, 160, 240], "vap_hisp": [8, 16, 24],
+        "vap_white": [60, 80, 100], "vap_black": [4, 50, 90],
     })
     assignments = {
         "allentown_map": pd.DataFrame({"GEOID": geoids, "district": [1, 1, 2]}),
@@ -119,3 +121,29 @@ def test_parser_partisan_defaults_to_partisan_folder():
     args = build_parser().parse_args(["partisan", "rh"])
     assert args.plans == ["rh"]
     assert str(args.out) == "partisan"
+    assert args.plans_source is None
+
+
+@pytest.mark.parametrize("command", ["list", "run", "summary", "maps", "partisan"])
+def test_parser_plans_source(command):
+    args = build_parser().parse_args([command, "--plans-source", "D:/plans/oh.csv"])
+    assert args.plans_source == "D:/plans/oh.csv"
+
+
+@pytest.mark.parametrize("command", ["run", "summary", "maps", "partisan"])
+def test_parser_vest(command):
+    assert build_parser().parse_args([command]).vest is None
+    assert build_parser().parse_args([command, "--vest", "my_pa.csv"]).vest == "my_pa.csv"
+
+
+def test_load_votes_uses_own_file_or_alarm(tmp_path, monkeypatch):
+    from pa_redistricting import config
+    monkeypatch.setattr(config, "VEST_SOURCE", None)
+    monkeypatch.setattr(cli, "fetch_elections", lambda: "alarm")
+    assert cli.load_votes(None) == "alarm"
+    assert cli.user_votes(None) is None
+
+    path = tmp_path / "my_pa.csv"
+    pd.DataFrame({"GEOID20": ["42001000010"], **{c: [1] for c in COUNT_COLUMNS},
+                  "ndv": [1.0], "nrv": [2.0]}).to_csv(path, index=False)
+    assert cli.load_votes(str(path))["GEOID"].tolist() == ["42001000010"]

@@ -6,12 +6,13 @@ import pytest
 from shapely.geometry import box
 
 from pa_redistricting import state_data
-from pa_redistricting.demographics import VEST_COLUMNS
+from pa_redistricting.demographics import COUNT_COLUMNS
 from pa_redistricting.state_data import (STATES, add_vote_shares, find_state, geography,
+                                         read_vest_file,
                                          join_state, load_vest, pick_state, state_menu,
                                          tiger_url)
 
-DEMOGRAPHICS = {c: [10, 20, 30] for c in VEST_COLUMNS}
+DEMOGRAPHICS = {c: [10, 20, 30] for c in COUNT_COLUMNS}
 VEST = pd.DataFrame({"GEOID": ["4200100001A", "42001000020", "42001000030"],
                      **DEMOGRAPHICS,
                      "ndv": [60.0, 0.0, 25.5], "nrv": [40.0, 0.0, 74.5],
@@ -155,9 +156,9 @@ def test_join_keeps_every_shape_and_reports_mismatches():
     assert report["only_in_shapes"] == ["42001009999"]
     assert report["only_in_data"] == ["42001000030"]
     assert report["pop_without_shape"] == 30
-    assert gdf.loc[gdf["GEOID"] == "42001009999", "pop_total"].isna().all()
+    assert gdf.loc[gdf["GEOID"] == "42001009999", "pop"].isna().all()
     assert gdf.loc[gdf["GEOID"] == "4200100001A", "dem_share"].iloc[0] == 0.6
-    assert "pop_nh_white" in gdf.columns
+    assert "pop_white" in gdf.columns
 
 
 def test_join_without_election_data():
@@ -171,3 +172,96 @@ def test_join_drops_duplicate_geoids(caplog):
     gdf, _ = join_state(shapes(["4200100001A"]), pd.concat([VEST, VEST.iloc[[0]]]))
     assert len(gdf) == 1
     assert "duplicate GEOIDs" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Your own ALARM-format file
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def no_network(monkeypatch):
+    monkeypatch.setattr(state_data.requests, "get",
+                        lambda *a, **kw: pytest.fail("downloaded instead of using the file"))
+
+
+def own_file(tmp_path, df=VEST, name="my_pa.csv"):
+    path = tmp_path / name
+    df.rename(columns={"GEOID": "GEOID20"}).to_csv(path, index=False)
+    return path
+
+
+def test_own_file_replaces_the_download(tmp_path, no_network):
+    df = load_vest("PA", source=own_file(tmp_path))
+    assert df["GEOID"].tolist() == VEST["GEOID"].tolist()
+    assert df["ndv"].tolist() == VEST["ndv"].tolist()
+
+
+def test_config_vest_source_is_used(tmp_path, no_network, monkeypatch):
+    monkeypatch.setattr(state_data.config, "VEST_SOURCE", str(own_file(tmp_path)))
+    assert len(load_vest("PA")) == 3
+
+
+def test_own_file_joins_like_alarm_data(tmp_path, no_network):
+    vest = read_vest_file(own_file(tmp_path), "PA")
+    gdf, report = join_state(shapes(["4200100001A", "42001000020", "42001000030"]), vest)
+    assert report["matched"] == 3
+    assert "dem_share" in gdf.columns and "pct_nh_white" in gdf.columns
+
+
+def test_own_file_pads_geoids(tmp_path):
+    al = VEST.assign(GEOID=["1001000010", "1001000020", "1001000030"])   # Excel dropped the 0
+    df = read_vest_file(own_file(tmp_path, al), "AL")
+    assert df["GEOID"].tolist() == ["01001000010", "01001000020", "01001000030"]
+
+
+def test_own_file_for_another_state_raises(tmp_path):
+    with pytest.raises(ValueError, match="start with 42, not 39"):
+        read_vest_file(own_file(tmp_path), "OH")
+
+
+def test_own_file_drops_stray_rows_from_another_state(tmp_path, caplog):
+    mixed = VEST.assign(GEOID=["42001000010", "42001000020", "39001000030"])
+    df = read_vest_file(own_file(tmp_path, mixed), "PA")
+    assert len(df) == 2
+    assert "dropping 1 rows" in caplog.text
+
+
+def test_own_file_duplicates_raise(tmp_path):
+    with pytest.raises(ValueError, match="appear more than once"):
+        read_vest_file(own_file(tmp_path, pd.concat([VEST, VEST.iloc[[0]]])), "PA")
+
+
+def test_own_file_missing_demographics_raise(tmp_path):
+    with pytest.raises(ValueError, match="missing ALARM demographic columns pop_hisp"):
+        read_vest_file(own_file(tmp_path, VEST.drop(columns="pop_hisp")), "PA")
+
+
+def test_own_file_needs_a_geoid_column(tmp_path):
+    path = tmp_path / "x.csv"
+    VEST.rename(columns={"GEOID": "precinct"}).to_csv(path, index=False)
+    with pytest.raises(ValueError, match="no GEOID column"):
+        read_vest_file(path, "PA")
+
+
+def test_own_file_missing_path_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        read_vest_file(tmp_path / "nope.csv", "PA")
+
+
+def test_pick_vest_enter_uses_alarm_data(monkeypatch):
+    monkeypatch.setattr(state_data.config, "VEST_SOURCE", None)
+    monkeypatch.setattr(state_data, "load_vest", lambda abbr, refresh=False: "alarm")
+    assert state_data.pick_vest("PA", ask=lambda prompt: "  ") == "alarm"
+
+
+def test_pick_vest_asks_again_after_a_bad_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(state_data.config, "VEST_SOURCE", None)
+    answers = iter([str(tmp_path / "nope.csv"), f'"{own_file(tmp_path)}"'])
+    df = state_data.pick_vest("PA", ask=lambda prompt: next(answers))
+    assert len(df) == 3
+    assert "Try again" in capsys.readouterr().out
+
+
+def test_low_match_rate_warns(caplog):
+    join_state(shapes(["4200100001A", "42001009998", "42001009999"]), VEST, "voting districts")
+    assert "Only 33% of the data's GEOIDs match the shapes" in caplog.text
+    assert "2020 voting districts" in caplog.text

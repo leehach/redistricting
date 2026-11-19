@@ -20,14 +20,14 @@ log = logging.getLogger(__name__)
 
 PA_COUNTIES = [f"{i:03d}" for i in range(1, 134, 2)]  # 001, 003, ... 133
 
-# Counts VEST also has (demographics.COUNT_COLUMNS).
+# Counts VEST also has, under VEST's names (demographics.COUNT_COLUMNS).
 # P2 / P4: Hispanic or Latino, and not Hispanic by race (total / 18+).
 # _001N total, _002N Hispanic, _005N.._011N not Hispanic: White .. two or more races
 SHARED_VARIABLES = {
-    "P2_001N": "pop_total", "P2_002N": "pop_hispanic",
-    **{f"P2_{i:03d}N": f"pop_nh_{r}" for i, r in zip(range(5, 12), RACES)},
-    "P4_001N": "vap_total", "P4_002N": "vap_hispanic",
-    **{f"P4_{i:03d}N": f"vap_nh_{r}" for i, r in zip(range(5, 12), RACES)},
+    "P2_001N": "pop", "P2_002N": "pop_hisp",
+    **{f"P2_{i:03d}N": f"pop_{r}" for i, r in zip(range(5, 12), RACES)},
+    "P4_001N": "vap", "P4_002N": "vap_hisp",
+    **{f"P4_{i:03d}N": f"vap_{r}" for i, r in zip(range(5, 12), RACES)},
 }
 
 # Only in the Census API
