@@ -24,6 +24,12 @@ counts for the two leading candidates; use the ``dem`` and ``rep`` arguments if
 your columns have other names. Every other column is a plan, with district assignments as values. A GeoDataFrame also works; its
 geometry column is ignored.
 
+The ALARM Project's 2020 VTD files (``county_split.read_vtd``) work as they
+are, with plan columns added: pick a race, such as
+``dem="pre_20_dem_bid", rep="pre_20_rep_tru"``, or the all-years averages
+``dem="ndv", rep="nrv"``. ALARM's other data columns (``state``, ``county``,
+``pop``, the other races and so on) are skipped when looking for plans.
+
 The chart functions need ``PyQt5`` and ``pyqtgraph``, the same libraries as the
 metrics GUI and the Qt DEA frontier explorer. They are imported inside those
 functions, so ``seats_votes_curve`` and ``score_plan`` only need pandas and numpy.
@@ -41,8 +47,13 @@ PySAL redistricting notebook, The Historical Seats-Votes Curve:
 https://github.com/pysal/redistricting/blob/master/notebooks/00%20-%20The%20Historical%20Seats-Votes%20Curve.ipynb
 
 pyqtgraph documentation. https://pyqtgraph.readthedocs.io/
+
+Kenny, C. T., McCartan, C., Kuriwaki, S., Simko, T. and Imai, K. (2021).
+2020 Redistricting Data Files. The ALARM Project.
+https://alarm-redist.org/posts/2021-08-10-census-2020/
 """
 
+import re
 import sys
 import warnings
 
@@ -51,6 +62,17 @@ import pandas as pd
 
 # columns that are not plans
 INFO_COLUMNS = ["cell_id", "dem", "rep", "total", "geometry"]
+
+# data columns in the ALARM Project's 2020 VTD files; never plans.
+# Same pattern as county_split.ALARM_COLUMN
+ALARM_GROUPS = "hisp|white|black|aian|asian|nhpi|other|two"
+ALARM_COLUMN = re.compile(rf"""^(?:
+      GEOID20 | state | county | vtd             # ids
+    | (?:pop|vap)(?:_(?:{ALARM_GROUPS}))?        # population and voting-age population
+    | [a-z]{{3}}_\d{{2}}_(?:dem|rep)_[a-z]+     # one race: office_year_party_candidate
+    | a[dr]v_\d{{2}}                            # average over one year's races
+    | n[dr]v                                     # average over all years
+)$""", re.VERBOSE)
 
 # one color per plan, in the order plans appear (the palette the Dash chart used)
 PLAN_COLORS = ["#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A",
@@ -150,8 +172,8 @@ def _plan_columns(df, exclude):
         Input table, after ``_prepare_df``.
     exclude : list of str
         Columns that are not plans, from ``_check_exclude``. ``cell_id``,
-        ``dem``, ``rep``, and ``total`` are always left out, so they do not need
-        to be listed.
+        ``dem``, ``rep``, ``total``, and the ALARM VTD data columns are always
+        left out, so they do not need to be listed.
 
     Returns
     -------
@@ -159,7 +181,8 @@ def _plan_columns(df, exclude):
         Names of the plan columns, in the order they appear in ``df``.
     """
     non_plan = INFO_COLUMNS + exclude
-    return [col for col in df.columns if col not in non_plan]
+    return [col for col in df.columns
+            if col not in non_plan and not (isinstance(col, str) and ALARM_COLUMN.match(col))]
 
 
 def _district_totals(df, plan):
@@ -229,11 +252,13 @@ def seats_votes_curve(df, low=0.35, high=0.65, step=0.005, exclude=None, dem="de
         Distance between vote shares. Defaults to 0.005 (half a percentage
         point). Must divide the range from ``low`` to ``high`` evenly.
     exclude : str or list of str, optional
-        Columns that are not plans, such as ``county`` or ``area``. The id,
-        ``dem``, ``rep``, and geometry columns are always left out.
+        Columns that are not plans, such as ``area``. The id, ``dem``,
+        ``rep``, geometry, and ALARM VTD data columns (see
+        ``ALARM_COLUMN``) are always left out.
     dem, rep : str, optional
         Names of the Democratic and Republican vote columns. Default to ``dem``
-        and ``rep``.
+        and ``rep``. For ALARM VTD data, a race such as ``pre_20_dem_bid`` and
+        ``pre_20_rep_tru``, or ``ndv`` and ``nrv``.
 
     Returns
     -------
