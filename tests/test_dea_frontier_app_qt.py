@@ -33,12 +33,17 @@ from PyQt5 import sip
 from PyQt5.QtCore import QEvent
 from PyQt5.QtWidgets import QApplication, QLabel, QPushButton
 
+from redistricting import dea_frontier_app_qt as app_module
 from redistricting.dea_frontier_app_qt import (
+    DEFAULT_METRICS,
+    MOCK_COUNTY_METHODS,
+    STATUS_LABELS,
     FrontierWindow,
     fmt,
     frontier_targets,
     make_mock_metrics,
     near_frontier,
+    off_frontier,
     pareto_2d,
     run_dea,
     staircase,
@@ -214,7 +219,7 @@ def peer_buttons(w):
 
 
 def first_inefficient(results):
-    return str(results.loc[results["DEA_Efficient"] == 0, "Plan_ID"].iloc[0])
+    return str(results.loc[off_frontier(results), "Plan_ID"].iloc[0])
 
 
 def first_efficient(results):
@@ -242,8 +247,8 @@ def test_combos_use_display_names_and_store_columns(line_window):
     assert line_window.yCombo.currentData() == "Bad"
 
 
-def test_slider_range_is_number_of_inefficient_plans(window, mock_results):
-    n_ineff = int((mock_results["DEA_Efficient"] == 0).sum())
+def test_slider_range_is_number_of_off_frontier_plans(window, mock_results):
+    n_ineff = int((mock_results["DEA_Status"] == "inefficient").sum())
     assert window.nSlider.minimum() == 0
     assert window.nSlider.maximum() == n_ineff
     assert window.nSlider.value() == 10
@@ -259,11 +264,13 @@ def test_n_default_capped_at_inefficient_count(line_window):
 # ---- chart ---------------------------------------------------------------
 def test_chart_layers(window, mock_results):
     n_eff = int(mock_results["DEA_Efficient"].sum())
-    n_others = len(mock_results) - n_eff - 10
+    n_weak = int((mock_results["DEA_Status"] == "weakly efficient").sum())
+    n_others = len(mock_results) - n_eff - n_weak - 10
     assert legend_names(window) == [
         f"Other plans ({n_others})",
         "Frontier for these 2 metrics only",
         "10 closest to frontier",
+        f"On frontier, weak ({n_weak})",
         f"DEA frontier ({n_eff})",
     ]
 
@@ -282,7 +289,7 @@ def test_hide_others_and_line(window):
     names = legend_names(window)
     assert not any(n.startswith("Other plans") for n in names)
     assert "Frontier for these 2 metrics only" not in names
-    assert len(scatter_items(window)) == 2
+    assert len(scatter_items(window)) == 3   # near, weak, frontier
 
 
 def test_slider_changes_near_group(window):
@@ -348,7 +355,7 @@ def test_panel_for_inefficient_plan(line_window):
     line_window.select("P4")
     texts = panel_texts(line_window)
     assert "P4" in texts
-    assert "inefficient" in texts
+    assert "off frontier" in texts
     assert "DEA score 0.333" in texts
     # P4 needs Badness 1 to reach the frontier; Goodness is already there
     assert "frontier target 1" in texts
@@ -368,7 +375,7 @@ def test_panel_for_efficient_plan(window, mock_results):
     plan = first_efficient(mock_results)
     window.select(plan)
     texts = panel_texts(window)
-    assert "efficient" in texts
+    assert "on frontier" in texts
     assert any("on the DEA frontier" in t for t in texts)
     assert not any(t.startswith("frontier target") for t in texts)
     assert peer_buttons(window) == []
@@ -398,7 +405,7 @@ def test_clicking_peer_selects_it(qapp, line_window):
 
 def test_clicking_peers_repeatedly_does_not_crash(qapp, window, mock_results):
     """Each click rebuilds the panel that holds the clicked button."""
-    inefficient = mock_results.loc[mock_results["DEA_Efficient"] == 0, "Plan_ID"]
+    inefficient = mock_results.loc[off_frontier(mock_results), "Plan_ID"]
     for plan in inefficient.astype(str).head(15):
         window.select(plan)
         old_panel = window.panelScroll.widget()
@@ -417,3 +424,208 @@ def test_deselect(line_window):
     line_window.select(None)
     assert "Click a plan" in panel_texts(line_window)
     assert not [i for i in line_window.plot.items if isinstance(i, pg.TextItem)]
+
+
+# ---- plan status wording --------------------------------------------------
+def first_weak(results):
+    return str(results.loc[results["DEA_Status"] == "weakly efficient", "Plan_ID"].iloc[0])
+
+
+def test_status_labels_avoid_efficient():
+    assert set(STATUS_LABELS) == {"efficient", "weakly efficient", "inefficient"}
+    assert not any("efficien" in label for label in STATUS_LABELS.values())
+
+
+def test_mock_data_has_weak_frontier_plans(mock_results):
+    # radial DEA on the default mock data gives 2 weak frontier plans
+    assert (mock_results["DEA_Status"] == "weakly efficient").sum() == 2
+
+
+def test_weak_plans_are_not_counted_as_closest(mock_results):
+    near = near_frontier(mock_results, len(mock_results))
+    assert set(near["DEA_Status"]) == {"inefficient"}
+
+
+def test_weak_plans_drawn_as_own_group(window, mock_results):
+    weak = sorted(mock_results.loc[mock_results["DEA_Status"] == "weakly efficient",
+                                   "Plan_ID"])
+    named = [i for i in scatter_items(window) if i.name()]
+    (item,) = [i for i in named if i.name().startswith("On frontier, weak")]
+    assert sorted(item.data["data"]) == weak
+
+
+def test_panel_for_weak_plan(window, mock_results):
+    window.select(first_weak(mock_results))
+    assert "on frontier (weak)" in panel_texts(window)
+
+
+# ---- zoom ----------------------------------------------------------------
+def view_shares(w):
+    """The visible part of each axis, as shares of its full view."""
+    (x0, x1), (y0, y1) = w.plot.getViewBox().viewRange()
+    x, y = w.xCombo.currentData(), w.yCombo.currentData()
+    return w._to_shares(x, x0, x1), w._to_shares(y, y0, y1)
+
+
+def zoom_to(w, x_shares, y_shares):
+    """Zoom as a user would, by moving the view box."""
+    x, y = w.xCombo.currentData(), w.yCombo.currentData()
+    w.plot.getViewBox().setRange(xRange=w._from_shares(x, x_shares),
+                                 yRange=w._from_shares(y, y_shares), padding=0)
+
+
+def assert_shares(got, expected):
+    for g, e in zip(got, expected):
+        assert g == pytest.approx(e, abs=1e-6)
+
+
+def test_starts_at_full_view(window):
+    assert_shares(view_shares(window), [(0, 1), (0, 1)])
+
+
+def test_full_view_pads_each_side(line_window):
+    # Good runs 1-3, so the full view adds 10% of 2 on each side
+    assert line_window._full_view("Good") == pytest.approx((0.8, 3.2))
+
+
+def test_shares_measure_from_worst_end(line_window):
+    # Bad is lower-is-better: its worst end is the high value
+    assert line_window._to_shares("Bad", 2.6, 3.2) == pytest.approx((0, 0.25))
+    assert line_window._from_shares("Bad", (0, 0.25)) == pytest.approx((2.6, 3.2))
+
+
+@pytest.mark.parametrize("axis, index", [("y", 2), ("y", 3), ("x", 1), ("x", 2)])
+def test_zoom_kept_when_metric_changes(window, axis, index):
+    zoom_to(window, (0.2, 0.6), (0.5, 0.9))
+    combo = window.yCombo if axis == "y" else window.xCombo
+    combo.setCurrentIndex(index)
+    assert_shares(view_shares(window), [(0.2, 0.6), (0.5, 0.9)])
+
+
+def test_zoom_kept_through_several_changes(window):
+    zoom_to(window, (0.1, 0.4), (0.3, 0.7))
+    for x, y in [(1, 2), (3, 0), (2, 1), (0, 3)]:
+        window.xCombo.setCurrentIndex(x)
+        window.yCombo.setCurrentIndex(y)
+        assert_shares(view_shares(window), [(0.1, 0.4), (0.3, 0.7)])
+
+
+def test_zoom_kept_when_controls_change(window):
+    zoom_to(window, (0.2, 0.6), (0.5, 0.9))
+    window.nSlider.setValue(3)
+    window.showOthers.setChecked(False)
+    window.select(first_inefficient(window.results))
+    assert_shares(view_shares(window), [(0.2, 0.6), (0.5, 0.9)])
+
+
+# ---- county-split measure -------------------------------------------------
+@pytest.fixture
+def mock_metrics():
+    return make_mock_metrics()
+
+
+def mock_rescore(df):
+    def rescore(metrics):
+        return run_dea(df, metrics=metrics)
+    return rescore
+
+
+@pytest.fixture
+def county_window(qapp, mock_metrics):
+    w = FrontierWindow(run_dea(mock_metrics), county_methods=MOCK_COUNTY_METHODS,
+                       rescore=mock_rescore(mock_metrics))
+    yield w
+    w.close()
+    w.deleteLater()
+    qapp.processEvents()
+
+
+def choose_county(w, col):
+    w.countyCombo.setCurrentIndex(w.countyCombo.findData(col))
+
+
+def test_mock_data_has_all_county_measures(mock_metrics):
+    for col in MOCK_COUNTY_METHODS:
+        assert col in mock_metrics.columns
+        assert (mock_metrics[col] >= 0).all()
+    # every split county is in at least 2 pieces
+    assert (mock_metrics["County_Split_Pieces"] >= 2 * mock_metrics["County_Splits"]).all()
+    assert mock_metrics["County_HHI"].between(0, 1).all()
+
+
+def test_county_combo_hidden_without_choices(window):
+    assert not window.countyCombo.isVisibleTo(window)
+    assert not window.countyLabel.isVisibleTo(window)
+
+
+def test_county_combo_lists_measures(county_window):
+    combo = county_window.countyCombo
+    assert combo.isVisibleTo(county_window)
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "Split Counties", "County Splits", "Spill Ratio", "Herfindahl Index"]
+    assert combo.currentData() == "County_Splits"
+
+
+@pytest.mark.parametrize("col", ["County_Split_Pieces", "Spill_Ratio", "County_HHI"])
+def test_choosing_county_measure_rescores(county_window, mock_metrics, col):
+    choose_county(county_window, col)
+    expected_metrics = {(col if m == "County_Splits" else m):
+                        (MOCK_COUNTY_METHODS[col] if m == "County_Splits" else hb)
+                        for m, hb in DEFAULT_METRICS.items()}
+    assert county_window.metrics == expected_metrics
+    expected = run_dea(mock_metrics, metrics=expected_metrics)
+    assert county_window.results["DEA_Score"].tolist() == expected["DEA_Score"].tolist()
+    n_eff = int(expected["DEA_Efficient"].sum())
+    assert county_window.summaryLabel.text().startswith(f"{n_eff} of 60 plans")
+
+
+def test_county_swap_replaces_axis(county_window):
+    # y starts on County_Splits, the second metric
+    assert county_window.yCombo.currentData() == "County_Splits"
+    choose_county(county_window, "County_HHI")
+    assert county_window.xCombo.currentData() == "Compactness"
+    assert county_window.yCombo.currentData() == "County_HHI"
+    names = [county_window.yCombo.itemText(i) for i in range(county_window.yCombo.count())]
+    assert "Herfindahl Index" in names and "Split Counties" not in names
+
+
+def test_county_swap_flips_axis_for_hhi(county_window):
+    vb = county_window.plot.getViewBox()
+    assert vb.state["yInverted"]            # split counties: lower is better
+    choose_county(county_window, "County_HHI")
+    assert not vb.state["yInverted"]        # Herfindahl index: higher is better
+
+
+def test_county_swap_keeps_selection_and_zoom(county_window):
+    zoom_to(county_window, (0.2, 0.6), (0.5, 0.9))
+    county_window.select("Plan_005")
+    choose_county(county_window, "Spill_Ratio")
+    assert county_window.selected == "Plan_005"
+    assert "Spill Ratio ↓" in panel_texts(county_window)
+    assert_shares(view_shares(county_window), [(0.2, 0.6), (0.5, 0.9)])
+
+
+def test_county_swap_updates_slider_range(county_window):
+    choose_county(county_window, "Spill_Ratio")
+    n_off = int(off_frontier(county_window.results).sum())
+    assert county_window.nSlider.maximum() == n_off
+    assert county_window.nSlider.value() <= n_off
+
+
+def test_failed_rescore_keeps_old_measure(qapp, mock_metrics, monkeypatch):
+    warnings = []
+    monkeypatch.setattr(app_module.QMessageBox, "warning",
+                        lambda *args: warnings.append(args[2]))
+
+    def broken(metrics):
+        raise RuntimeError("solver missing")
+
+    w = FrontierWindow(run_dea(mock_metrics), county_methods=MOCK_COUNTY_METHODS,
+                       rescore=broken)
+    before = w.results.copy()
+    choose_county(w, "Spill_Ratio")
+    assert warnings == ["solver missing"]
+    assert w.countyCombo.currentData() == "County_Splits"
+    assert "County_Splits" in w.metrics
+    assert w.results.equals(before)
+    w.close()

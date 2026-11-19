@@ -14,7 +14,7 @@
    <string>DEA Frontier</string>
   </property>
   <widget class="QWidget" name="centralwidget">
-   <layout class="QVBoxLayout" name="mainLayout" stretch="0,0,0,1">
+   <layout class="QVBoxLayout" name="mainLayout" stretch="0,0,0,0,1">
     <property name="spacing">
      <number>10</number>
     </property>
@@ -201,6 +201,49 @@
       </item>
       <item>
        <spacer name="controlsSpacer">
+        <property name="orientation">
+         <enum>Qt::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="scoringLayout">
+      <property name="spacing">
+       <number>8</number>
+      </property>
+      <item>
+       <widget class="QLabel" name="countyLabel">
+        <property name="text">
+         <string>County-split measure</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QComboBox" name="countyCombo">
+        <property name="sizeAdjustPolicy">
+         <enum>QComboBox::AdjustToContents</enum>
+        </property>
+        <property name="minimumSize">
+         <size>
+          <width>170</width>
+          <height>0</height>
+         </size>
+        </property>
+        <property name="toolTip">
+         <string>Which county-split metric the frontier uses. Changing it rescores every plan.</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <spacer name="scoringSpacer">
         <property name="orientation">
          <enum>Qt::Horizontal</enum>
         </property>

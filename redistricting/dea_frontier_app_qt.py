@@ -9,16 +9,36 @@ dea_frontier_app_qt.ui, which must sit in the same folder as this file.
     up and right are better
   * the DEA-frontier plans in crimson
   * the n plans closest to the frontier (highest DEA scores among the
-    inefficient plans) in blue, with a slider for n
+    off-frontier plans) in blue, with a slider for n
   * optionally, all other plans in light gray, and the 2-metric Pareto
     frontier as a dashed staircase line
   * hover over a plan to see its values; click it to see its metrics, its
     percentile on each one, the values it would need to reach the frontier,
     and its frontier peers (click a peer to jump to it)
+  * a choice of county-split measure (split counties, county splits, spill
+    ratio, or Herfindahl index); changing it rescores every plan
+  * zooming keeps the same zoom when you switch metrics: each axis shows the
+    same share of its metric's range as before
 
 Note: the DEA frontier uses ALL metrics at once, so a crimson plan can sit
 inside the dashed 2-metric line. That's expected: it earns its place on the
 frontier with a metric that isn't on the current axes.
+
+Plan status
+-----------
+The side panel labels each plan with one of the names in STATUS_LABELS.
+These avoid the economics term "efficient":
+
+  on frontier          no blend of other plans beats it
+  on frontier (weak)   scores 1, but could still improve one metric without
+                       losing on any other. Drawn as amber diamonds. Only
+                       radial scoring (run_dea, used for mock data and
+                       --csv) produces this; the default mock data has 2.
+  off frontier         a blend of frontier plans beats it
+
+Real plans loaded from files are scored with SBM (slacks-based measure),
+which counts that leftover room in the score itself. Under SBM a "weak"
+plan scores below 1, so real plans are only ever on or off the frontier.
 
 Usage
 -----
@@ -44,11 +64,16 @@ This file finds the widgets by the names they have in the .ui file
 editing the layout. The side panel's contents change with each plan, so they
 are built here in code.
 
+The data columns keep the standard DEA names (DEA_Efficient, DEA_Status with
+values "efficient", "weakly efficient", "inefficient"), as in dea_pcp.py, so
+saved results stay compatible. Only the text shown in the window changes.
+
 Requirements: PyQt5, pyqtgraph, numpy, pandas, scipy
 """
 
 import argparse
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -80,22 +105,48 @@ DEFAULT_METRICS: dict[str, bool] = {
     "Partisan_Gap": False,    # e.g. |efficiency gap| or partisan bias
 }
 
+# County-split measures in the mock data (and a --csv table that has these
+# columns). Any of them can replace County_Splits in DEFAULT_METRICS.
+MOCK_COUNTY_METHODS: dict[str, bool] = {
+    "County_Splits": False,        # counties split between 2+ districts
+    "County_Split_Pieces": False,  # district pieces inside split counties
+    "Spill_Ratio": False,          # share of people outside their county's main district
+    "County_HHI": True,            # Herfindahl index; 1 = no county split
+}
+
 DISPLAY_NAMES: dict[str, str] = {
     "Compactness": "Compactness (PP)",
-    "County_Splits": "County Splits",
+    "County_Splits": "Split Counties",
+    "County_Split_Pieces": "County Splits",
+    "Spill_Ratio": "Spill Ratio",
+    "County_HHI": "Herfindahl Index",
     "Pop_Dev_Pct": "Pop. Deviation (%)",
     "Partisan_Gap": "Partisan Gap",
 }
 
 TOL = 1e-6
 
-# Display names for the metrics in plan_metrics.DIRECTION.
+# Display names for the metrics in plan_metrics.DIRECTION and
+# plan_metrics.COUNTY_SPLIT_DIRECTION.
 PLAN_METRIC_NAMES: dict[str, str] = {
     "polsby_popper": "Polsby-Popper (mean)",
     "max_pop_deviation": "Max Pop. Deviation (%)",
     "split_counties": "Split Counties",
+    "county_split_intersections": "County Splits",
+    "spill_ratio": "Spill Ratio",
+    "county_hhi": "Herfindahl Index",
     "efficiency_gap": "Efficiency Gap (abs)",
 }
+
+# DEA_Status value -> what the window calls it. Change the wording here.
+STATUS_LABELS: dict[str, str] = {
+    "efficient": "on frontier",
+    "weakly efficient": "on frontier (weak)",
+    "inefficient": "off frontier",
+}
+
+# Share of a metric's range added on each side of the full view.
+VIEW_PADDING = 0.1
 
 
 # --------------------------------------------------------------------------
@@ -117,13 +168,24 @@ def make_mock_metrics(n: int = 60, seed: int = 42) -> pd.DataFrame:
                              + rng.normal(0, 1.5, n))
     pop_dev = 0.05 * (1 - quality) ** 1.5 + 0.004 * tradeoff + np.abs(rng.normal(0, 0.003, n))
     partisan_gap = np.abs(0.08 * (1 - quality) * rng.uniform(0.3, 1.0, n) + rng.normal(0, 0.01, n))
+    splits = np.clip(county_splits, 0, None).astype(int)
+
+    # The other county-split measures, drawn after everything above so the
+    # columns above stay the same for a given seed. They follow the split
+    # count but not exactly, so each one gives a somewhat different frontier.
+    pieces = 2 * splits + rng.poisson(0.35 * splits)     # >= 2 per split county
+    spill = 0.0045 * splits * rng.uniform(0.6, 1.4, n)   # 0 when nothing is split
+    hhi = 1 - spill * rng.uniform(1.3, 1.7, n)           # 1 when nothing is split
 
     return pd.DataFrame({
         "Plan_ID": [f"Plan_{i:03d}" for i in range(1, n + 1)],
         "Compactness": np.clip(compactness, 0.05, 0.95).round(4),
-        "County_Splits": np.clip(county_splits, 0, None).astype(int),
+        "County_Splits": splits,
         "Pop_Dev_Pct": np.clip(pop_dev, 0.0, None).round(4),
         "Partisan_Gap": partisan_gap.round(4),
+        "County_Split_Pieces": pieces,
+        "Spill_Ratio": spill.round(4),
+        "County_HHI": hhi.round(4),
     })
 
 
@@ -223,9 +285,10 @@ def run_dea(
                   "output" - how far could the higher-is-better metrics grow?
 
     Returns a copy of df with added columns:
-      DEA_Score       radial efficiency, 0-1 (1 = on the frontier)
+      DEA_Score       radial score, 0-1 (1 = on the frontier)
       DEA_Efficient   1 if score == 1 and all slacks are 0, else 0
-      DEA_Status      "efficient", "weakly efficient", or "inefficient"
+      DEA_Status      "efficient", "weakly efficient", or "inefficient";
+                      the window shows these as STATUS_LABELS
       Pareto_Optimal  1 if no other single plan beats it on every metric
       DEA_Peers       IDs of the efficient plans that benchmark this plan
       Slack_<metric>  remaining improvement possible on each metric after
@@ -326,6 +389,7 @@ def score_sbm(metrics: pd.DataFrame, direction: dict[str, str],
     the frontier when its SBM score is 1. SBM gives no peers or slacks, so
     the side panel leaves those out.
     """
+    metrics = metrics[list(direction)]
     scores = dea.score(metrics, direction, "sbm")
     efficient = (scores >= 1 - TOL).astype(int)
 
@@ -342,10 +406,31 @@ def read_plan_files(paths: list[str]) -> dict[str, pd.DataFrame]:
     return {Path(p).stem: pd.read_csv(p, dtype=str) for p in sorted(paths)}
 
 
-class PlanLoader(QThread):
-    """Reads plan files, measures them and scores them, off the UI thread."""
+def sbm_rescorer(table: pd.DataFrame, id_col: str = "Plan_ID"
+                 ) -> Callable[[dict[str, bool]], pd.DataFrame]:
+    """A function that scores ``table`` with SBM for a given set of metrics.
 
-    done = pyqtSignal(object)    # the score_sbm results
+    FrontierWindow calls it when the county-split measure changes.
+    """
+    def rescore(metrics: dict[str, bool]) -> pd.DataFrame:
+        direction = {m: "higher" if hb else "lower" for m, hb in metrics.items()}
+        return score_sbm(table, direction, id_col)
+    return rescore
+
+
+# plan_metrics.DIRECTION and COUNTY_SPLIT_DIRECTION as {metric: higher_is_better}
+def _higher_is_better(direction: dict[str, str]) -> dict[str, bool]:
+    return {m: d == "higher" for m, d in direction.items()}
+
+
+class PlanLoader(QThread):
+    """Reads plan files, measures them and scores them, off the UI thread.
+
+    Measures all four county-split metrics, so the window can switch between
+    them without measuring again. Scores with split_counties to start.
+    """
+
+    done = pyqtSignal(object)    # (metric table, score_sbm results)
     failed = pyqtSignal(str)     # an error message for the user
 
     # The geounits download once per app run, then stay in memory.
@@ -360,8 +445,11 @@ class PlanLoader(QThread):
             if PlanLoader._geounits is None:
                 PlanLoader._geounits = plan_metrics.load_pa_geounits()
             plans = plan_metrics.combine_plans(read_plan_files(self.paths))
-            metrics = plan_metrics.measure(plans, PlanLoader._geounits)
-            self.done.emit(score_sbm(metrics, plan_metrics.DIRECTION))
+            table = plan_metrics.measure(
+                plans, PlanLoader._geounits,
+                county_metrics=list(plan_metrics.COUNTY_SPLIT_DIRECTION))
+            results = score_sbm(table, plan_metrics.DIRECTION)
+            self.done.emit((table, results))
         except Exception as error:  # show any failure to the user
             self.failed.emit(str(error))
 
@@ -369,9 +457,14 @@ class PlanLoader(QThread):
 # --------------------------------------------------------------------------
 # Data helpers
 # --------------------------------------------------------------------------
+def off_frontier(results: pd.DataFrame) -> pd.Series:
+    """True for plans off the frontier (not on it, not even weakly)."""
+    return results["DEA_Status"] == "inefficient"
+
+
 def near_frontier(results: pd.DataFrame, n: int) -> pd.DataFrame:
-    """The n inefficient plans with the highest DEA scores."""
-    return results[results["DEA_Efficient"] == 0].nlargest(n, "DEA_Score")
+    """The n off-frontier plans with the highest DEA scores."""
+    return results[off_frontier(results)].nlargest(n, "DEA_Score")
 
 
 def pareto_2d(results: pd.DataFrame, x: str, y: str, metrics: dict) -> pd.DataFrame:
@@ -444,45 +537,45 @@ class FrontierWindow(QMainWindow):
         orientation: str = "input",
         n_default: int = 10,
         title: str = "DEA Frontier of Prospective Redistricting Plans",
+        county_methods: dict[str, bool] | None = None,
+        rescore: Callable[[dict[str, bool]], pd.DataFrame] | None = None,
     ):
+        """
+        county_methods : {column: higher_is_better} of county-split measures
+            the user can choose between. One of them must be in ``metrics``.
+        rescore : function that takes a metrics dict like ``metrics`` and
+            returns new results for it. Needed to switch county measures.
+        The county-split dropdown is hidden unless both are given.
+        """
         super().__init__()
         # Creates every widget in the .ui file as an attribute of this
         # window, named as in Qt Designer: self.xCombo, self.nSlider, ...
         uic.loadUi(str(UI_FILE), self)
 
-        self.results = results.reset_index(drop=True)
         self.id_col = id_col
-        self.metrics = metrics or DEFAULT_METRICS
         self.names = {**DISPLAY_NAMES, **(display_names or {})}
         self.orientation = orientation
+        self.county_methods = county_methods or {}
+        self.rescore = rescore
         self.selected: str | None = None   # plan shown in the side panel
         self._axes = None                  # (x, y) last drawn
-        self._scores = dict(zip(self.results[id_col].astype(str),
-                                self.results["DEA_Score"]))
-
-        cols = list(self.metrics)
-        n_ineff = int((self.results["DEA_Efficient"] == 0).sum())
-        n_eff = int(self.results["DEA_Efficient"].sum())
+        # Visible part of each axis, as shares of its metric's full view
+        # (0 = worst end, 1 = best end). Kept when the metrics change, so
+        # the zoom stays the same. Starts as the full view.
+        self._view = ((0.0, 1.0), (0.0, 1.0))
+        self._drawing = False              # True while the code moves the view
 
         # Text
         self.setWindowTitle(title)
         self.titleLabel.setText(title)
-        self.summaryLabel.setText(
-            f"{n_eff} of {len(self.results)} plans are on the DEA frontier (crimson). "
-            "Axes are flipped where needed so up and right are always better. "
-            "The DEA frontier uses all metrics, so a crimson plan can sit inside "
-            "the dashed line, which uses only the two metrics shown. Scroll to zoom, "
-            "drag to pan, and click the small \"A\" in the corner to reset the view.")
 
         # Controls. Each dropdown item shows the display name and stores the
         # column name, which currentData() returns.
-        for col in cols:
-            self.xCombo.addItem(self.names.get(col, col), col)
-            self.yCombo.addItem(self.names.get(col, col), col)
-        self.yCombo.setCurrentIndex(1 if len(cols) > 1 else 0)
-        self.nSlider.setRange(0, n_ineff)
-        self.nSlider.setValue(min(n_default, n_ineff))
+        self._set_results(results, metrics or DEFAULT_METRICS)
+        self.yCombo.setCurrentIndex(1 if len(self.metrics) > 1 else 0)
+        self.nSlider.setValue(n_default)
         self.nValue.setText(str(self.nSlider.value()))
+        self._setup_county_combo()
 
         # Chart
         self.plot = self.plotWidget.getPlotItem()
@@ -492,6 +585,8 @@ class FrontierWindow(QMainWindow):
             self.plot.getAxis(side).enableAutoSIPrefix(False)
         self.plot.addLegend(offset=(10, -10), labelTextColor=INK,
                             brush=pg.mkBrush(255, 255, 255, 230), pen=pg.mkPen(RULE))
+        # Remember the zoom whenever the user scrolls, drags or resets it
+        self.plot.getViewBox().sigRangeChanged.connect(self._view_changed)
 
         # Chart gets 2/3 of the width, side panel 1/3
         self.splitter.setStretchFactor(0, 2)
@@ -510,6 +605,93 @@ class FrontierWindow(QMainWindow):
         toolbar.addAction("Load plan folder…", self.load_folder)
         self._loader: PlanLoader | None = None
 
+        self.redraw()
+        self.update_panel()
+
+    # ---- results and county-split measure -------------------------------
+    def _set_results(self, results: pd.DataFrame, metrics: dict[str, bool]):
+        """Show new scores: refill the axis dropdowns, slider and summary.
+
+        Keeps the axes on the same metrics (or the metric that replaced one)
+        and keeps the selected plan. Call redraw() afterwards.
+        """
+        old = getattr(self, "metrics", {})
+        # old metric -> new metric in the same position (the county swap)
+        swap = dict(zip(old, metrics))
+        x, y = (swap.get(c, c) for c in (self.xCombo.currentData(),
+                                          self.yCombo.currentData()))
+
+        self.results = results.reset_index(drop=True)
+        self.metrics = metrics
+        self._scores = dict(zip(self.results[self.id_col].astype(str),
+                                self.results["DEA_Score"]))
+
+        for combo, col in ((self.xCombo, x), (self.yCombo, y)):
+            combo.blockSignals(True)   # redraw once at the end, not per item
+            combo.clear()
+            for c in metrics:
+                combo.addItem(self.names.get(c, c), c)
+            if col in metrics:
+                combo.setCurrentIndex(list(metrics).index(col))
+            combo.blockSignals(False)
+
+        n_ineff = int(off_frontier(self.results).sum())
+        n_eff = int(self.results["DEA_Efficient"].sum())
+        self.nSlider.blockSignals(True)
+        self.nSlider.setRange(0, n_ineff)   # also caps the current value
+        self.nSlider.blockSignals(False)
+        self.nValue.setText(str(self.nSlider.value()))
+
+        self.summaryLabel.setText(
+            f"{n_eff} of {len(self.results)} plans are on the DEA frontier (crimson). "
+            "Axes are flipped where needed so up and right are always better. "
+            "The DEA frontier uses all metrics, so a crimson plan can sit inside "
+            "the dashed line, which uses only the two metrics shown. Scroll to zoom, "
+            "drag to pan, and click the small \"A\" in the corner to reset the view.")
+
+    def _county_metric(self) -> str | None:
+        """The county-split measure in use, if any."""
+        return next((m for m in self.metrics if m in self.county_methods), None)
+
+    def _setup_county_combo(self):
+        current = self._county_metric()
+        usable = self.rescore is not None and current is not None \
+            and len(self.county_methods) > 1
+        self.countyLabel.setVisible(usable)
+        self.countyCombo.setVisible(usable)
+        if not usable:
+            return
+        for col in self.county_methods:
+            self.countyCombo.addItem(self.names.get(col, col), col)
+        self.countyCombo.setCurrentIndex(list(self.county_methods).index(current))
+        self.countyCombo.currentIndexChanged.connect(self._county_changed)
+
+    def _county_changed(self, index: int):
+        """Rescore every plan with the chosen county-split measure."""
+        new, old = self.countyCombo.itemData(index), self._county_metric()
+        if new is None or new == old:
+            return
+        # Same metrics in the same order, with the county measure swapped
+        metrics = {(new if m == old else m): (self.county_methods[new] if m == old else hb)
+                   for m, hb in self.metrics.items()}
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            results = self.rescore(metrics)
+        except Exception as error:  # show any failure to the user
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, "Could not rescore plans", str(error))
+            self.countyCombo.blockSignals(True)
+            self.countyCombo.setCurrentIndex(list(self.county_methods).index(old))
+            self.countyCombo.blockSignals(False)
+            return
+        QApplication.restoreOverrideCursor()
+
+        self._drawing = True   # the view is redrawn below; don't record it
+        try:
+            self._set_results(results, metrics)
+        finally:
+            self._drawing = False
         self.redraw()
         self.update_panel()
 
@@ -539,11 +721,14 @@ class FrontierWindow(QMainWindow):
         self._loader.failed.connect(self._load_failed)
         self._loader.start()
 
-    def _loaded(self, results: pd.DataFrame):
+    def _loaded(self, loaded: tuple[pd.DataFrame, pd.DataFrame]):
         self._progress.close()
+        table, results = loaded
         window = FrontierWindow(
-            results, metrics={m: d == "higher" for m, d in plan_metrics.DIRECTION.items()},
-            display_names=PLAN_METRIC_NAMES)
+            results, metrics=_higher_is_better(plan_metrics.DIRECTION),
+            display_names=PLAN_METRIC_NAMES,
+            county_methods=_higher_is_better(plan_metrics.COUNTY_SPLIT_DIRECTION),
+            rescore=sbm_rescorer(table))
         # Keep a reference, or Python deletes the new window.
         QApplication.instance().frontier_window = window
         window.show()
@@ -571,13 +756,23 @@ class FrontierWindow(QMainWindow):
     # ---- chart ----------------------------------------------------------
     def redraw(self, *_):
         """Draw the chart for the current controls and selection."""
-        r, m = self.results, self.metrics
         x, y = self.xCombo.currentData(), self.yCombo.currentData()
         if x is None or y is None:
             return
+        # Drawing moves the view (flipping axes, fitting new metrics); only
+        # the user's own zooming should change the remembered zoom.
+        self._drawing = True
+        try:
+            self._draw(x, y)
+        finally:
+            self._drawing = False
+
+    def _draw(self, x: str, y: str):
+        r, m = self.results, self.metrics
         eff = r[r["DEA_Efficient"] == 1]
+        weak = r[r["DEA_Status"] == "weakly efficient"]
         near = near_frontier(r, self.nSlider.value())
-        others = r.drop(index=eff.index.union(near.index))
+        others = r.drop(index=eff.index.union(weak.index).union(near.index))
 
         self.plot.clear()   # also empties the legend
 
@@ -592,6 +787,9 @@ class FrontierWindow(QMainWindow):
                 name="Frontier for these 2 metrics only"))
         if len(near):
             self._add_points(near, x, y, f"{len(near)} closest to frontier", NEAR, 11, "o")
+        if len(weak):
+            self._add_points(weak, x, y, f"On frontier, weak ({len(weak)})",
+                             STATUS_COLORS["weakly efficient"], 12, "d")
         self._add_points(eff, x, y, f"DEA frontier ({len(eff)})", FRONTIER, 14, "d")
         self._draw_selected(x, y)
 
@@ -601,12 +799,43 @@ class FrontierWindow(QMainWindow):
         self.plot.setLabel("bottom", f"{self.names.get(x, x)}  (better →)")
         self.plot.setLabel("left", f"{self.names.get(y, y)}  (better ↑)")
 
-        # Fit the view only when the axes change, so changing n or the
-        # checkboxes keeps any zoom the user has set
+        # Move the view only when the axes change, so changing n or the
+        # checkboxes leaves it alone. New metrics get the same zoom: each
+        # axis shows the same share of its metric's range as before.
         if (x, y) != self._axes:
-            self.plot.setRange(xRange=(r[x].min(), r[x].max()),
-                               yRange=(r[y].min(), r[y].max()), padding=0.1)
             self._axes = (x, y)
+            self.plot.setRange(xRange=self._from_shares(x, self._view[0]),
+                               yRange=self._from_shares(y, self._view[1]),
+                               padding=0)
+
+    # ---- zoom -----------------------------------------------------------
+    def _full_view(self, col: str) -> tuple[float, float]:
+        """The range that shows every plan, plus VIEW_PADDING on each side."""
+        values = self.results[col].astype(float)
+        lo, hi = float(values.min()), float(values.max())
+        span = hi - lo if hi > lo else (abs(hi) or 1.0)
+        return lo - VIEW_PADDING * span, hi + VIEW_PADDING * span
+
+    def _to_shares(self, col: str, lo: float, hi: float) -> tuple[float, float]:
+        """A visible range of ``col`` as shares of its full view, 0 = worst end."""
+        a, b = self._full_view(col)
+        s0, s1 = (lo - a) / (b - a), (hi - a) / (b - a)
+        # lower-is-better axes are flipped, so measure from the other end
+        return (s0, s1) if self.metrics[col] else (1 - s1, 1 - s0)
+
+    def _from_shares(self, col: str, shares: tuple[float, float]) -> tuple[float, float]:
+        """The inverse of _to_shares: a range of ``col`` in its own units."""
+        s0, s1 = shares if self.metrics[col] else (1 - shares[1], 1 - shares[0])
+        a, b = self._full_view(col)
+        return a + s0 * (b - a), a + s1 * (b - a)
+
+    def _view_changed(self, *_):
+        """Remember the user's zoom as shares of each axis."""
+        if self._drawing or self._axes is None:
+            return
+        (x0, x1), (y0, y1) = self.plot.getViewBox().viewRange()
+        x, y = self._axes
+        self._view = (self._to_shares(x, x0, x1), self._to_shares(y, y0, y1))
 
     def _add_points(self, df, x, y, name, color, size, symbol):
         """Add one group of plans as clickable points with hover text."""
@@ -687,7 +916,8 @@ class FrontierWindow(QMainWindow):
         # Header: plan id, status badge, score
         header = QHBoxLayout()
         header.addWidget(_label(self.selected, "font-size: 18px; font-weight: 600;"))
-        header.addWidget(_label(status, f"background: {color}; color: white; "
+        header.addWidget(_label(STATUS_LABELS.get(status, status),
+                                f"background: {color}; color: white; "
                                         "border-radius: 9px; padding: 2px 10px; "
                                         "font-size: 12px;"))
         header.addStretch(1)
@@ -778,7 +1008,8 @@ def show_app(results: pd.DataFrame, **kwargs) -> int:
     """Open the explorer for run_dea() output and wait until it is closed.
 
     Keyword arguments go to FrontierWindow: id_col, metrics, display_names,
-    orientation, n_default, title. Returns Qt's exit code.
+    orientation, n_default, title, county_methods, rescore. Returns Qt's
+    exit code.
     """
     app = QApplication.instance()
     if app is None:
@@ -804,8 +1035,17 @@ def main():
 
     df = pd.read_csv(args.csv) if args.csv else make_mock_metrics()
     results = run_dea(df, id_col=args.id_col, orientation=args.orientation)
+
+    # Offer the county-split measures this table has
+    county_methods = {c: hb for c, hb in MOCK_COUNTY_METHODS.items() if c in df.columns}
+
+    def rescore(metrics: dict[str, bool]) -> pd.DataFrame:
+        return run_dea(df, id_col=args.id_col, metrics=metrics,
+                       orientation=args.orientation)
+
     sys.exit(show_app(results, id_col=args.id_col, orientation=args.orientation,
-                      n_default=args.n))
+                      n_default=args.n, county_methods=county_methods,
+                      rescore=rescore))
 
 
 if __name__ == "__main__":

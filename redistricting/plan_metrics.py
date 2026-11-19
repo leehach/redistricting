@@ -38,6 +38,15 @@ DIRECTION = {
     "efficiency_gap": "lower",
 }
 
+# The county-split metrics in county_split.py, in the same form. Any of them
+# can stand in for split_counties; measure() adds the ones asked for.
+COUNTY_SPLIT_DIRECTION = {
+    "split_counties": "lower",
+    "county_split_intersections": "lower",
+    "spill_ratio": "lower",
+    "county_hhi": "higher",
+}
+
 GEOID_COLUMNS = ["GEOID20", "GEOID"]
 BLOCK_GEOID_LENGTH = 15
 
@@ -89,7 +98,8 @@ def combine_plans(tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
     return combined
 
 
-def measure(plans: pd.DataFrame, geounits: gpd.GeoDataFrame) -> pd.DataFrame:
+def measure(plans: pd.DataFrame, geounits: gpd.GeoDataFrame,
+            county_metrics: list[str] | None = None) -> pd.DataFrame:
     """Return one row per plan and one column per metric in DIRECTION.
 
     Every metric is 0 or more, as DEA needs:
@@ -100,20 +110,34 @@ def measure(plans: pd.DataFrame, geounits: gpd.GeoDataFrame) -> pd.DataFrame:
     - ``split_counties``: how many counties have more than one district.
     - ``efficiency_gap``: its absolute value, so it does not say which
       party the plan favors.
+
+    ``county_metrics`` adds more county-split columns from
+    COUNTY_SPLIT_DIRECTION, for example ``["spill_ratio", "county_hhi"]``,
+    so a caller can choose which one to score with.
     """
+    county_metrics = list(county_metrics or [])
+    unknown = [m for m in county_metrics if m not in COUNTY_SPLIT_DIRECTION]
+    if unknown:
+        raise ValueError(f"Unknown county-split metric(s) {unknown}. "
+                         f"Choose from {list(COUNTY_SPLIT_DIRECTION)}")
+    columns = list(DIRECTION) + [m for m in county_metrics if m not in DIRECTION]
+
     _check_geoids(plans, geounits)
     plans = plans.reindex(geounits.index)
 
+    county = [m for m in columns if m in COUNTY_SPLIT_DIRECTION]
     rows = {
-        name: _measure_plan(plans[name], geounits) for name in plans.columns
+        name: _measure_plan(plans[name], geounits, county)
+        for name in plans.columns
     }
     table = pd.DataFrame.from_dict(rows, orient="index")
     table["polsby_popper"] = compactness.measure_plans(
         plans, geounits, "polsby_popper")
-    return table[list(DIRECTION)]
+    return table[columns]
 
 
-def _measure_plan(plan: pd.Series, geounits: gpd.GeoDataFrame) -> dict:
+def _measure_plan(plan: pd.Series, geounits: gpd.GeoDataFrame,
+                  county_metrics: list[str]) -> dict:
     population = geounits["population"].groupby(plan).sum()
     ideal = population.sum() / len(population)
 
@@ -122,13 +146,13 @@ def _measure_plan(plan: pd.Series, geounits: gpd.GeoDataFrame) -> dict:
 
     splits = county_split.score_plan(
         geounits["county"], geounits["population"], plan,
-        metrics=["split_counties"])
+        metrics=county_metrics)
 
     return {
         "max_pop_deviation": float(
             (population - ideal).abs().max() / ideal * 100),
-        "split_counties": splits["split_counties"],
         "efficiency_gap": abs(partisan["efficiency_gap"]),
+        **splits,
     }
 
 
