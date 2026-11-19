@@ -15,6 +15,7 @@ try:
     from redistricting import compactness
 except ImportError:  # no compactness.py on this branch
     compactness = None
+from redistricting import competitiveness, county_split, responsiveness, seats_votes
 
 
 # fields (the lists are what auto-match looks for)
@@ -23,6 +24,7 @@ field("dem_votes", "Democratic votes",
 field("rep_votes", "Republican votes",
       ["rep_votes", "repvotes", "votes_rep", "rep", "republican", "nrv"], numeric=True)
 field("county", "County", ["county", "countyfp", "countyfp20", "cntyfp", "county_name", "cnty"])
+field("population", "Population", ["population", "pop", "totpop", "p0010001"], numeric=True)
 
 
 # partisan. positive = favors R, negative = favors D
@@ -73,3 +75,35 @@ def county_splits(ctx):
     districts_per_county = district.groupby(county).nunique()
     return pd.DataFrame(per_district).assign(
         counties_split_in_plan=int((districts_per_county > 1).sum()))
+
+
+# our sprint metrics, one plan-wide number each
+@metric("Competitiveness", "Competitive districts", needs=PARTISAN_NEEDS)
+def competitive(ctx):
+    return competitiveness.score_plan(ctx.column("dem_votes"), ctx.column("rep_votes"),
+                                      ctx.district)
+
+
+@metric("Responsiveness", "Responsiveness", needs=PARTISAN_NEEDS)
+def responsive(ctx):
+    return responsiveness.score_plan(ctx.column("dem_votes"), ctx.column("rep_votes"),
+                                     ctx.district)
+
+
+@metric("Seats-votes", "Seats at 45%, 50% and 55%", needs=PARTISAN_NEEDS)
+def seats(ctx):
+    return seats_votes.score_plan(ctx.column("dem_votes"), ctx.column("rep_votes"),
+                                  ctx.district)
+
+
+def _county_score(name):
+    def score(ctx):
+        return county_split.score_plan(ctx.column("county"), ctx.column("population"),
+                                       ctx.district, metrics=[name])
+    return score
+
+
+for _name, _label in [("split_counties", "Split counties"),
+                      ("county_split_intersections", "County split intersections"),
+                      ("spill_ratio", "Spill ratio"), ("county_hhi", "County HHI")]:
+    metric("County splits", _label, needs=["county", "population"])(_county_score(_name))
