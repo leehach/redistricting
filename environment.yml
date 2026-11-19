@@ -12,6 +12,11 @@ dependencies:
   - pyomo
   - pandas
   - shapely
+  # DEA scripts (dea_pcp.py, dea_frontier_app_qt.py)
+  - scipy
+  - plotly
+  - pyqt=5
+  - pyqtgraph>=0.12.2
   # optional, testing, etc.
   - pytest
   # docs
