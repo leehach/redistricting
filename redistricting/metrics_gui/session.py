@@ -1,31 +1,41 @@
-"""The session's in-memory plans object: plan name -> its reconciled table. nothing is saved to disk
+"""The session's in-memory plans object: plan name -> its district assignments. nothing is saved to disk
+
+A plan is the minimum: one row per unit, GEOID + district. Votes, demographics and shapes are not part
+of a plan, they're joined on when an analysis runs (see reconcile.py).
 
     plans = SessionPlans()
-    plans.add("my_plan", gdf, notes=["voting data: 9,178 of 9,178 precincts matched"])
+    plans.add(Plan("my_plan", assignment, kind="PAF"))
     plans.names              # ["my_plan"]
-    plans.get("my_plan")     # the table, ready for MetricsDialog(data=..., name=...)
+    plans.get("my_plan")     # DataFrame[GEOID, district]
+    plans.long_table()       # every plan stacked: GEOID, plan, district
 """
 
 from dataclasses import dataclass, field
 
 import pandas as pd
 
+COLUMNS = ["GEOID", "district"]
+KINDS = {"PAF": "precinct", "BAF": "block"}  # precinct / block assignment file
+
 
 @dataclass
 class Plan:
     name: str
-    data: pd.DataFrame  # 1 row per precinct: id, district, votes, demographics (+ geometry)
-    source: str = ""    # where it came from, ex. "disk" or "repo"
-    notes: list[str] = field(default_factory=list)  # what reconcile said about the join
+    assignment: pd.DataFrame  # GEOID (text), district (int)
+    kind: str = "PAF"         # "PAF" (precincts) or "BAF" (Census blocks)
+    source: str = ""          # the file it came from
+    notes: list[str] = field(default_factory=list)  # what happened when it was read
 
     @property
-    def has_shapes(self) -> bool:
-        return getattr(self.data, "active_geometry_name", None) is not None
+    def n_units(self) -> int:
+        return len(self.assignment)
+
+    @property
+    def n_districts(self) -> int:
+        return int(self.assignment["district"].nunique())
 
     def summary(self) -> str:
-        fields = len(self.data.columns) - self.has_shapes
-        shapes = "with shapes" if self.has_shapes else "no shapes"
-        return f"{len(self.data):,} precincts, {fields} fields, {shapes}"
+        return f"{self.kind}: {self.n_units:,} {KINDS[self.kind]}s in {self.n_districts} districts"
 
 
 class SessionPlans:
@@ -36,15 +46,19 @@ class SessionPlans:
     def names(self) -> list[str]:
         return list(self._plans)
 
-    def add(self, name: str, data: pd.DataFrame, source: str = "", notes: list[str] | None = None,
-            replace: bool = False) -> Plan:
-        name = name.strip()
-        if not name:
+    def add(self, plan: Plan, replace: bool = False) -> Plan:
+        plan.name = plan.name.strip()
+        if not plan.name:
             raise ValueError("The plan needs a name")
-        if name in self._plans and not replace:
-            raise KeyError(f"There is already a plan named {name!r}")
-        self._plans[name] = Plan(name, data, source, list(notes or []))
-        return self._plans[name]
+        if plan.name in self._plans and not replace:
+            raise KeyError(f"There is already a plan named {plan.name!r}")
+        if list(plan.assignment.columns) != COLUMNS:
+            raise ValueError(f"A plan's table has exactly the columns {COLUMNS}, "
+                             f"not {list(plan.assignment.columns)}")
+        if plan.kind not in KINDS:
+            raise ValueError(f"kind is one of {list(KINDS)}, not {plan.kind!r}")
+        self._plans[plan.name] = plan
+        return plan
 
     def free_name(self, name: str) -> str:
         """name if it isn't taken, otherwise name_2, name_3 ..."""
@@ -61,10 +75,17 @@ class SessionPlans:
         return self._plans[name]
 
     def get(self, name: str) -> pd.DataFrame:
-        return self.plan(name).data
+        return self.plan(name).assignment
 
     def remove(self, name: str) -> None:
         del self._plans[self.plan(name).name]
+
+    def long_table(self) -> pd.DataFrame:
+        """every plan in one table: GEOID, plan, district"""
+        if not self._plans:
+            return pd.DataFrame(columns=["GEOID", "plan", "district"])
+        return pd.concat([p.assignment.assign(plan=p.name)[["GEOID", "plan", "district"]]
+                          for p in self], ignore_index=True)
 
     def __contains__(self, name: str) -> bool:
         return name in self._plans

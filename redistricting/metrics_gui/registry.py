@@ -3,14 +3,18 @@ a metric returns a Series/DataFrame indexed by district, or a dict of plan-wide 
 """
 
 import re
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cached_property
+from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 
+# our package sits next to this folder in the repo, no install needed
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pa_redistricting_partisan_metrics"))
 from pa_redistricting.partisan_metrics import score_districts  # our group's partisan math
 
 GEOMETRY = "geometry"  # put in needs if the metric uses shapes

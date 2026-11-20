@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pandas as pd
 
+# our package sits next to this folder in the repo, no install needed
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pa_redistricting_partisan_metrics"))
 from pa_redistricting.partisan_metrics import favors
 
 from registry import GEOMETRY, field, metric

@@ -8,6 +8,8 @@ dependencies:
   - geopandas
   - glpk
   - matplotlib
+  - pyqt=5
+  - requests
   - numpy
   - pyomo
   - pandas

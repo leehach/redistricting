@@ -1,7 +1,9 @@
-"""Joins district assignments, voting data and demographic data from different files into
-one table, 1 row per precinct. no Qt in here so it can be used (and tested) without the window
+"""Joins a plan's district assignments to precinct data (votes, demographics, shapes) from
+other tables, 1 row per precinct. Runs when an analysis opens, plans themselves stay GEOID + district.
+no Qt in here so it can be used (and tested) without the window
 
     plan = reconcile(assignments, voting=votes, demographics=census)
+    plan = reconcile(assignments, extras={"PA VEST data": vest, "PA shapes": vtds})
     plan.data    # the joined table (GeoDataFrame if any of the files had shapes)
     plan.notes   # what happened, ex. "voting data: 8,921 of 9,178 precincts matched"
 """
@@ -64,7 +66,8 @@ def find_key(data: pd.DataFrame, label: str = "file") -> str:
 
 def clean_key(values: pd.Series) -> pd.Series:
     """ids as stripped text. 42001000010.0 (id read as a float) -> '42001000010'"""
-    text = values.astype("string").str.strip().str.replace(r"\.0+$", "", regex=True)
+    # only all-digit ids: VTD codes can have '.' in them (Montana), so '...1.0' there is a real id
+    text = values.astype("string").str.strip().str.replace(r"^(\d+)\.0+$", r"\1", regex=True)
     return text.mask(text.isin(["", "nan", "None", "<NA>"])).astype(object)
 
 
@@ -105,10 +108,16 @@ def _prepare(data: pd.DataFrame, label: str, key: str | None) -> tuple[pd.DataFr
 
 def reconcile(assignments: pd.DataFrame, voting: pd.DataFrame | None = None,
               demographics: pd.DataFrame | None = None, shapes: pd.DataFrame | None = None,
-              keys: dict[str, str] | None = None) -> Reconciled:
+              keys: dict[str, str] | None = None,
+              extras: dict[str, pd.DataFrame] | None = None,
+              optional: set[str] = frozenset()) -> Reconciled:
     """Left-join everything onto the assignments by precinct id, so every assigned precinct is kept.
 
-    keys = {"assignments": "GEOID20", "voting": ...} to name an id column instead of guessing.
+    extras = {label: table} joins any number of other tables too, in order, after the named ones.
+    keys = {"assignments": "GEOID20", "voting": ...} to name an id column instead of guessing
+    (an extra's key goes under its label).
+    optional = extra labels that are left out with a note, not an error, if none of their ids match
+    (ex. another state's file).
     Raises ReconcileError if a file has no id column or none of its ids are in the plan.
     """
     keys = keys or {}
@@ -130,9 +139,10 @@ def reconcile(assignments: pd.DataFrame, voting: pd.DataFrame | None = None,
     base = base.reset_index(drop=True)
     crs = base.crs if has_shapes(base) else None
 
-    extras = [("voting data", "voting", voting), ("demographic data", "demographics", demographics),
+    tables = [("voting data", "voting", voting), ("demographic data", "demographics", demographics),
               ("shapes", "shapes", shapes)]
-    for label, name, other in extras:
+    tables += [(label, label, table) for label, table in (extras or {}).items()]
+    for label, name, other in tables:
         if other is None:
             continue
         other, key = _prepare(other, label, keys.get(name))
@@ -145,6 +155,9 @@ def reconcile(assignments: pd.DataFrame, voting: pd.DataFrame | None = None,
 
         matched = base[base_key].isin(other[key])
         if not matched.any():
+            if label in optional:
+                notes.append(f"{label}: no precincts in this plan, not joined")
+                continue
             raise ReconcileError(
                 f"{label}: none of its precinct ids match the district assignments. "
                 f"Plan ids look like {base[base_key].iloc[0]!r}, {label} ids look like "

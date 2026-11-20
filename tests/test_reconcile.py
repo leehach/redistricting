@@ -156,6 +156,28 @@ def test_assignments_with_only_ids_raises():
         reconcile(make_assignments()[["GEOID20"]])
 
 
+def test_extras_are_joined_under_their_own_labels():
+    plan = reconcile(make_assignments(), extras={"VEST": make_votes(), "my census": make_census()})
+    assert plan.data["dem"].tolist() == [10, 20, 30, 40]
+    assert len(plan.data) == 4 and "geometry" not in plan.data.columns
+    assert any(n.startswith("VEST: 4 of 4") for n in plan.notes)
+    assert any(n.startswith("my census:") for n in plan.notes)
+
+
+def test_extra_with_no_matching_ids_names_its_label():
+    votes = make_votes().assign(geoid=["91", "92", "93", "94"])
+    with pytest.raises(ReconcileError, match="^VEST: none"):
+        reconcile(make_assignments(), extras={"VEST": votes})
+
+
+def test_optional_extra_with_no_matching_ids_is_left_out():
+    votes = make_votes().assign(geoid=["91", "92", "93", "94"])
+    plan = reconcile(make_assignments(), extras={"other state": votes, "VEST": make_votes()},
+                     optional={"other state"})
+    assert plan.data["dem"].tolist() == [10, 20, 30, 40]  # VEST still joined
+    assert "other state: no precincts in this plan, not joined" in plan.notes
+
+
 def test_inputs_are_not_changed():
     assignments, votes = make_assignments(), make_votes()
     reconcile(assignments, voting=votes)
