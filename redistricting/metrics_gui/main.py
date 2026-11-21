@@ -9,6 +9,7 @@ from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtCore import Qt
 
 import metrics  # noqa: F401 (registers the metrics)
+import theme
 from metrics_dialog_ui import Ui_MetricsDialog  # the layout from Qt Designer
 from registry import (FIELDS, GEOMETRY, REGISTRY, PlanContext, auto_match, has_shapes,
                       needed_fields, run_metrics, table_columns)
@@ -63,6 +64,7 @@ class MetricsDialog(QtWidgets.QDialog, Ui_MetricsDialog):
 
         if data is not None:
             self.set_data(data, name)
+            self.inputLineEdit.setText(f"from session: {name}")  # opened from the main window
         self.refresh_fields()
 
     # --- metric checkboxes ---
@@ -127,7 +129,7 @@ class MetricsDialog(QtWidgets.QDialog, Ui_MetricsDialog):
             # index 0 is NOT_SET, so column i is names[i - 1]
             combo.currentIndexChanged.connect(
                 lambda i, key=key: self.set_column(key, names[i - 1] if i else None))
-            label = QtWidgets.QLabel(FIELDS[key].label)
+            label = QtWidgets.QLabel(f"{FIELDS[key].label} *")  # every listed field is required
             label.setToolTip("Needed by: " + ", ".join(m.name for m in chosen if key in m.needs))
             self.fieldForm.addRow(label, combo)
         if any(GEOMETRY in m.needs for m in chosen):
@@ -240,6 +242,7 @@ class MetricsDialog(QtWidgets.QDialog, Ui_MetricsDialog):
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
+    theme.apply(app)
     dialog = MetricsDialog()
     dialog.show()
     app.exec()

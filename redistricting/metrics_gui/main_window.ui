@@ -1,0 +1,326 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1290</width>
+    <height>930</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Redistricting Plans</string>
+  </property>
+  <widget class="QWidget" name="centralWidget">
+   <layout class="QVBoxLayout" name="verticalLayout" stretch="3,2">
+    <item>
+     <widget class="QGroupBox" name="plansGroupBox">
+      <property name="title">
+       <string>Plans</string>
+      </property>
+      <layout class="QVBoxLayout" name="plansLayout">
+       <item>
+        <layout class="QHBoxLayout" name="planButtonLayout">
+         <item>
+          <widget class="QPushButton" name="importButton">
+           <property name="text">
+            <string>Import Plans...</string>
+           </property>
+           <property name="default">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="importFolderButton">
+           <property name="text">
+            <string>Import Folder...</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="planButtonSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QPushButton" name="metricsButton">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+           <property name="text">
+            <string>Metrics...</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="removeButton">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+           <property name="text">
+            <string>Remove</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QTableWidget" name="planTable">
+         <property name="editTriggers">
+          <set>QAbstractItemView::NoEditTriggers</set>
+         </property>
+         <property name="alternatingRowColors">
+          <bool>true</bool>
+         </property>
+         <property name="selectionMode">
+          <enum>QAbstractItemView::ExtendedSelection</enum>
+         </property>
+         <property name="selectionBehavior">
+          <enum>QAbstractItemView::SelectRows</enum>
+         </property>
+         <property name="sortingEnabled">
+          <bool>true</bool>
+         </property>
+         <property name="wordWrap">
+          <bool>false</bool>
+         </property>
+         <attribute name="horizontalHeaderStretchLastSection">
+          <bool>true</bool>
+         </attribute>
+         <attribute name="verticalHeaderVisible">
+          <bool>false</bool>
+         </attribute>
+         <column>
+          <property name="text">
+           <string>Plan</string>
+          </property>
+         </column>
+         <column>
+          <property name="text">
+           <string>Type</string>
+          </property>
+         </column>
+         <column>
+          <property name="text">
+           <string>Units</string>
+          </property>
+         </column>
+         <column>
+          <property name="text">
+           <string>Districts</string>
+          </property>
+         </column>
+         <column>
+          <property name="text">
+           <string>File</string>
+          </property>
+         </column>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="planInfoLabel">
+         <property name="text">
+          <string/>
+         </property>
+         <property name="wordWrap">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QGroupBox" name="dataGroupBox">
+      <property name="title">
+       <string>Precinct data</string>
+      </property>
+      <layout class="QVBoxLayout" name="dataLayout">
+       <item>
+        <layout class="QHBoxLayout" name="dataButtonLayout">
+         <item>
+          <widget class="QPushButton" name="addDataButton">
+           <property name="text">
+            <string>Add Files...</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="stateDataButton">
+           <property name="text">
+            <string>Download State Data...</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="dataButtonSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QPushButton" name="removeDataButton">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+           <property name="text">
+            <string>Remove</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QListWidget" name="dataList">
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QMenuBar" name="menuBar">
+   <widget class="QMenu" name="menuFile">
+    <property name="title">
+     <string>&amp;File</string>
+    </property>
+    <addaction name="actionImportPlans"/>
+    <addaction name="actionImportFolder"/>
+    <addaction name="separator"/>
+    <addaction name="actionExit"/>
+   </widget>
+   <widget class="QMenu" name="menuData">
+    <property name="title">
+     <string>&amp;Data</string>
+    </property>
+    <addaction name="actionAddData"/>
+    <addaction name="actionDownloadState"/>
+    <addaction name="separator"/>
+    <addaction name="actionRemoveData"/>
+   </widget>
+   <widget class="QMenu" name="menuPlan">
+    <property name="title">
+     <string>&amp;Plan</string>
+    </property>
+    <addaction name="actionMetrics"/>
+    <addaction name="separator"/>
+    <addaction name="actionRemovePlans"/>
+   </widget>
+   <widget class="QMenu" name="menuView">
+    <property name="title">
+     <string>&amp;View</string>
+    </property>
+    <widget class="QMenu" name="menuTheme">
+     <property name="title">
+      <string>&amp;Theme</string>
+     </property>
+    </widget>
+    <addaction name="menuTheme"/>
+   </widget>
+   <addaction name="menuFile"/>
+   <addaction name="menuPlan"/>
+   <addaction name="menuData"/>
+   <addaction name="menuView"/>
+  </widget>
+  <widget class="QStatusBar" name="statusBar"/>
+  <action name="actionImportPlans">
+   <property name="text">
+    <string>&amp;Import Plans...</string>
+   </property>
+   <property name="statusTip">
+    <string>Read one or more plan files (GEOID, district)</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+O</string>
+   </property>
+  </action>
+  <action name="actionImportFolder">
+   <property name="text">
+    <string>Import &amp;Folder...</string>
+   </property>
+   <property name="statusTip">
+    <string>Read every plan file in a folder</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Shift+O</string>
+   </property>
+  </action>
+  <action name="actionExit">
+   <property name="text">
+    <string>E&amp;xit</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Q</string>
+   </property>
+  </action>
+  <action name="actionAddData">
+   <property name="text">
+    <string>&amp;Add Precinct Data Files...</string>
+   </property>
+   <property name="statusTip">
+    <string>Votes, demographics or shapes keyed by GEOID</string>
+   </property>
+  </action>
+  <action name="actionDownloadState">
+   <property name="text">
+    <string>&amp;Download State Data...</string>
+   </property>
+   <property name="statusTip">
+    <string>Shapes, VEST election + demographic data, or Census data for any state</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+D</string>
+   </property>
+  </action>
+  <action name="actionRemoveData">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>&amp;Remove Precinct Data</string>
+   </property>
+  </action>
+  <action name="actionMetrics">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>&amp;Metrics...</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+M</string>
+   </property>
+  </action>
+  <action name="actionRemovePlans">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>&amp;Remove Plans</string>
+   </property>
+   <property name="shortcut">
+    <string>Del</string>
+   </property>
+  </action>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

@@ -107,7 +107,7 @@ class Ui_MetricsDialog(object):
     def retranslateUi(self, MetricsDialog):
         _translate = QtCore.QCoreApplication.translate
         MetricsDialog.setWindowTitle(_translate("MetricsDialog", "Plan Metrics"))
-        self.inputGroupBox.setTitle(_translate("MetricsDialog", "1. Input file"))
+        self.inputGroupBox.setTitle(_translate("MetricsDialog", "1. Input file *"))
         self.inputLineEdit.setPlaceholderText(_translate("MetricsDialog", "CSV, shapefile, GeoPackage or GeoJSON: one row per precinct or per district"))
         self.inputBrowseButton.setText(_translate("MetricsDialog", "..."))
         self.inputInfoLabel.setText(_translate("MetricsDialog", "No file loaded"))
@@ -116,7 +116,7 @@ class Ui_MetricsDialog(object):
         self.selectAllButton.setText(_translate("MetricsDialog", "Select all"))
         self.selectNoneButton.setText(_translate("MetricsDialog", "Select none"))
         self.fieldsGroupBox.setTitle(_translate("MetricsDialog", "3. Match fields"))
-        self.outputGroupBox.setTitle(_translate("MetricsDialog", "4. Output CSV"))
+        self.outputGroupBox.setTitle(_translate("MetricsDialog", "4. Output CSV *"))
         self.outputBrowseButton.setText(_translate("MetricsDialog", "..."))
         self.runButton.setText(_translate("MetricsDialog", "Calculate"))
         self.closeButton.setText(_translate("MetricsDialog", "Close"))

@@ -5,17 +5,13 @@ like to perform, match the file's fields, and save one CSV with a row per distri
 
 ## Setup (once, from the repo root)
 
-- **gus8066 (now):** installs our package so python can import the partisan math, plus esda for compactness
-  ```powershell
-  pip install -e redistricting\pa_redistricting_partisan_metrics
-  conda install -c conda-forge esda
-  ```
-- **environment.yml (later):** add `pyqt=5`, `requests`, `matplotlib` to the yml first, our package still needs the pip line
-  ```powershell
-  conda env create -f environment.yml
-  conda activate redistricting
-  pip install -e redistricting\pa_redistricting_partisan_metrics
-  ```
+The class env has everything (pyqt5 and requests are in the yml now). the GUI finds our
+pa_redistricting package from its spot in the repo, so nothing else to install
+```powershell
+conda env create -f environment.yml
+conda activate redistricting
+```
+already made the env before pyqt was added? `conda env update -n redistricting -f environment.yml`
 
 ## Running it
 
@@ -26,6 +22,54 @@ python main.py
 ```
 
 run `main.py`
+
+## Main window
+
+`python app.py` opens the main window instead. plans you import live in memory (`window.plans`,
+a `SessionPlans`) until you close it, and the table shows what's in there
+
+**Plans** - `Import Plans...` (Ctrl+O) reads any number of plan files at once, `Import Folder...`
+reads every .csv/.txt/.tsv in a folder (files ending in `_metrics` are skipped). you can also drag
+files or folders onto the window. a plan is just the minimum:
+
+- column 1 = GEOID, whatever the header says. 11 characters = precinct (PAF), 15 = block (BAF)
+- column 2 = district, a whole number
+- anything after that is ignored. no header row, or a pandas index column in front, is fine too.
+  blank districts = unassigned, left out
+
+files that don't fit are skipped and listed at the end, the rest still import. importing a name
+that's already loaded asks once: replace, keep both, or skip
+
+**Precinct data** - votes, demographics, shapes. not part of a plan, it's joined on by GEOID when
+an analysis opens. `Download State Data...` (Ctrl+D) picks any state (+ DC) and any of:
+
+- shapes - 2020 Census TIGER/Line, needed for compactness
+- VEST - 2020 election results + demographics (ALARM Project), no API key
+- Census - 2020 PL 94-171 demographics from the Census API, needs `CENSUS_API_KEY`. its race
+  columns include Hispanics so they're named `pop_white_incl_hisp` etc (VEST's `pop_white` is
+  non-Hispanic)
+
+all by 2020 voting district, except CA, HI, ME and OR which are by Census block (ALARM only has
+blocks for those, so plans for them need to be BAFs). downloads are saved in
+`~/.redistricting_cache` so each one only downloads once. `Add Files...` adds your own tables (any
+format, the GEOID column just has to be findable: GEOID20, GEOID, precinct_id ...)
+
+**Metrics...** opens the dialog below with the selected plan joined to the precinct data for its
+state (from the GEOIDs) plus any files you added. the status bar says how the join went
+(ex. "PA VEST data: 9,178 of 9,178 precincts matched")
+
+none of the data parts need the window:
+
+```python
+from plan_files import read_plan_files
+from reconcile import reconcile
+plans, problems = read_plan_files(["my_plans/"])
+table = reconcile(plans[0].assignment, extras={"VEST": vest}).data
+```
+
+to add an analysis: put a button next to `Metrics...` in `main_window.ui`, run
+`pyuic5 main_window.ui -o main_window_ui.py`, and connect it in `app.py` like `open_metrics`
+(`self.current_plan()` gives you the plan, `self.analysis_table(plan)` the joined table)
 
 ## How to use
 
@@ -49,6 +93,12 @@ every row. positive = favors R, negative = favors D. compactness 1 = most compac
 
 ## Files
 
+- `app.py` - the main window (plan imports, precinct data, buttons that open analyses)
+- `main_window.ui` / `main_window_ui.py` - its layout, same deal as the dialog's
+- `plan_files.py` - reads PAFs/BAFs (GEOID, district) one at a time or in bulk
+- `session.py` - the in-memory plans object, GEOID + district per plan
+- `state_data.py` - shapes, VEST and Census downloads for any state, cached
+- `reconcile.py` - joins a plan to precinct data on the GEOID when an analysis runs
 - `metrics_dialog.ui` - the layout, edit in Qt Designer
 - `metrics_dialog_ui.py` - generated from the .ui, don't edit by hand
 - `main.py` - the window code (buttons, checkboxes, field dropdowns)
