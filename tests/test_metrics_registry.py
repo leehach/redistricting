@@ -1,12 +1,15 @@
 """
-Tests for the sprint metrics added to redistricting/metrics_gui/metrics.py.
+Tests for how the sprint metrics are wired into the metrics GUI registry
+(redistricting/metrics_gui/metrics.py and registry.py).
 
 Run from the folder that holds ``redistricting/``:
 
-    python -m pytest tests/test_metrics_gui.py
+    python -m pytest tests/test_metrics_registry.py
 
 These run the metrics the same way the window does (auto_match, PlanContext,
-run_metrics), without opening Qt.
+run_metrics), without opening Qt. The metric math itself is tested in each
+module's own test file, so here each metric only has to give the same answer
+as calling its module directly.
 
 Toy state: 8 precincts of 50 votes and 100 people each, 2 counties, 4 districts.
 
@@ -19,10 +22,6 @@ Toy state: 8 precincts of 50 votes and 100 people each, 2 counties, 4 districts.
     06        41    9   B       3
     07        41    9   B       4
     08        29   21   B       4
-
-District dem shares are 0.30, 0.49, 0.51, 0.70, statewide 50%. Each county is
-cut 50/50 between two districts. Expected values are worked out by hand in
-each test.
 """
 
 import sys
@@ -37,7 +36,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "redistricting" / "
 import metrics  # noqa: E402,F401  adds every metric to REGISTRY
 from registry import REGISTRY, PlanContext, auto_match, needed_fields, run_metrics  # noqa: E402
 
-from redistricting import competitiveness, county_split  # noqa: E402
+from redistricting import (competitiveness, county_split, responsiveness,  # noqa: E402
+                           seats_votes)
 
 TOLERANCE = 1e-9
 
@@ -48,6 +48,8 @@ OUR_METRICS = [("Competitiveness", "Competitive districts"),
                ("County splits", "County split intersections"),
                ("County splits", "Spill ratio"),
                ("County splits", "County HHI")]
+
+COUNTY_METRICS = [(g, n) for g, n in OUR_METRICS if g == "County splits"]
 
 
 def make_plan():
@@ -60,6 +62,11 @@ def make_plan():
         "pop":      [100] * 8,
         "district": [1, 1, 2, 2, 3, 3, 4, 4],
     })
+
+
+def votes_table():
+    """The toy plan in the layout the partisan modules read."""
+    return make_plan()[["precinct_id", "dem", "rep", "district"]]
 
 
 def find(group, name):
@@ -110,98 +117,38 @@ def test_auto_match_finds_columns():
 
 
 # ---------------------------------------------------------------------------
-# Metric values
-# ---------------------------------------------------------------------------
-
-def test_competitive_districts():
-    # margins: 0.40 0.02 0.02 0.40 -> 2 at or below 0.05
-    observed = value(run([find("Competitiveness", "Competitive districts")]),
-                     "competitive_districts")
-    expected = 2
-    assert observed == expected
-
-
-def test_responsiveness():
-    # at 52.5%: shares 0.325 0.515 0.535 0.725 -> 3 of 4 seats = 0.75
-    # at 47.5%: shares 0.275 0.465 0.485 0.675 -> 1 of 4 seats = 0.25
-    # (0.75 - 0.25) / 0.05 = 10
-    observed = value(run([find("Responsiveness", "Responsiveness")]), "responsiveness")
-    expected = 10.0
-    assert abs(observed - expected) < TOLERANCE
-
-
-def test_seats_at_three_vote_shares():
-    # 45%: shares 0.25 0.44 0.46 0.65 -> 1 seat
-    # 50%: shares 0.30 0.49 0.51 0.70 -> 2 seats
-    # 55%: shares 0.35 0.54 0.56 0.75 -> 3 seats
-    table = run([find("Seats-votes", "Seats at 45%, 50% and 55%")])
-    observed = [value(table, "dem_seats_at_45pct"), value(table, "dem_seats_at_50pct"),
-                value(table, "dem_seats_at_55pct")]
-    expected = [1, 2, 3]
-    assert observed == expected
-
-
-def test_split_counties():
-    # A is in districts 1 and 2, B in 3 and 4 -> both split
-    observed = value(run([find("County splits", "Split counties")]), "split_counties")
-    expected = 2
-    assert observed == expected
-
-
-def test_county_split_intersections():
-    # A in 2 districts + B in 2 districts -> 4 pieces
-    observed = value(run([find("County splits", "County split intersections")]),
-                     "county_split_intersections")
-    expected = 4
-    assert observed == expected
-
-
-def test_spill_ratio():
-    # largest piece of each county is 200 of 400 -> 400 of 800 stay
-    # 1 - 400 / 800 = 0.5
-    observed = value(run([find("County splits", "Spill ratio")]), "spill_ratio")
-    expected = 0.5
-    assert abs(observed - expected) < TOLERANCE
-
-
-def test_county_hhi():
-    # each county: 0.5^2 + 0.5^2 = 0.5
-    observed = value(run([find("County splits", "County HHI")]), "county_hhi")
-    expected = 0.5
-    assert abs(observed - expected) < TOLERANCE
-
-
-def test_whole_counties():
-    # one district per county: nothing split, nothing spills, hhi 1
-    data = make_plan()
-    data["district"] = [1, 1, 1, 1, 2, 2, 2, 2]
-    chosen = [find(g, n) for g, n in OUR_METRICS if g == "County splits" and n != "County splits"]
-    table = run(chosen, data)
-    observed = [value(table, "split_counties"), value(table, "county_split_intersections"),
-                value(table, "spill_ratio"), value(table, "county_hhi")]
-    expected = [0, 0, 0.0, 1.0]
-    assert all(abs(o - e) < TOLERANCE for o, e in zip(observed, expected))
-
-
-# ---------------------------------------------------------------------------
 # Same answer as the metric modules
 # ---------------------------------------------------------------------------
 
 def test_competitive_matches_module():
-    data = make_plan()
-    module = competitiveness.competitive_districts(
-        data[["precinct_id", "dem", "rep", "district"]])
+    module = competitiveness.competitive_districts(votes_table())
     observed = value(run([find("Competitiveness", "Competitive districts")]),
                      "competitive_districts")
     expected = module["competitive_districts"].iloc[0]
     assert observed == expected
 
 
+def test_responsiveness_matches_module():
+    module = responsiveness.responsiveness(votes_table())
+    observed = value(run([find("Responsiveness", "Responsiveness")]), "responsiveness")
+    expected = module["responsiveness"].iloc[0]
+    assert abs(observed - expected) < TOLERANCE
+
+
+def test_seats_matches_module():
+    # the curve's rows at 45%, 50% and 55% hold the same seat counts
+    curve = seats_votes.seats_votes_curve(votes_table(), low=0.45, high=0.55, step=0.05)
+    table = run([find("Seats-votes", "Seats at 45%, 50% and 55%")])
+    observed = [value(table, "dem_seats_at_45pct"), value(table, "dem_seats_at_50pct"),
+                value(table, "dem_seats_at_55pct")]
+    expected = curve["dem_seats"].tolist()
+    assert observed == expected
+
+
 def test_county_metrics_match_module():
     data = make_plan()
     module = county_split.all_metrics(data[["precinct_id", "county", "pop", "district"]])
-    chosen = [find(g, n) for g, n in OUR_METRICS if g == "County splits" and n != "County splits"]
-    table = run(chosen)
+    table = run([find(g, n) for g, n in COUNTY_METRICS])
     names = ["split_counties", "county_split_intersections", "spill_ratio", "county_hhi"]
     observed = [value(table, n) for n in names]
     expected = [module[n].iloc[0] for n in names]
