@@ -19,8 +19,8 @@ competitiveness module uses:
 
 The first column is the precinct id (any name). ``dem`` and ``rep`` are vote
 counts for the two leading candidates; use the ``dem`` and ``rep`` arguments if
-your columns have other names. Every other column is a plan, with district assignments as values. A GeoDataFrame also works; its
-geometry column is ignored.
+your columns have other names. Every other column is a plan, with district assignments as values. 
+A GeoDataFrame also works; its geometry column is ignored.
 
 References
 ----------
@@ -219,8 +219,9 @@ def responsiveness(df, window=0.025, exclude=None, dem="dem", rep="rep"):
     Raises
     ------
     ValueError
-        If ``window`` is out of range, a vote column is missing or has a blank cell, ``exclude`` names a
-        column that is not in ``df``, or a plan has no district with votes.
+        If ``window`` is out of range, a vote column is missing or has a 
+        blank cell, ``exclude`` names a column that is not in ``df``, or
+        a plan has no district with votes.
 
     Notes
     -----
